@@ -3,7 +3,7 @@
     "ghostImage": "bird.png",
     "//_comment": "下方 markerPreset 若改為 'pattern'，則會讀取 markerPatternUrl 的檔案",
     "markerPreset": "pattern",
-    "markerPatternUrl": "03.patt"
+    "markerPatternUrl": "04.patt"
   },
   "display": {
     "width": 1.5,
@@ -25,5 +25,6 @@
   }
 
 }
+
 
 
