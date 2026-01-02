@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
-    <title>AR 靈異畫像 (JSON版)</title>
+    <title>AR 靈異畫像 (動態生成版)</title>
     
     <!-- 核心引擎 -->
     <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
@@ -43,143 +43,143 @@
 </head>
 <body style="margin: 0px; overflow: hidden;">
 
-    <!-- 螢幕特效層 -->
     <div class="vignette"></div>
     <div class="scanline"></div>
     
-    <!-- UI 提示文字 -->
+    <!-- UI 介面層 -->
     <div id="ui-layer">
-        <div id="status-box" class="bg-black/70 border-l-4 border-red-600 px-6 py-3 text-gray-200 font-mono text-center transition-all duration-300">
-            <h2 id="ui-title" class="text-xl font-bold text-red-500">讀取中...</h2>
-            <p id="ui-desc" class="text-sm mt-1">正在載入設定檔</p>
+        <div id="status-box" class="bg-black/70 border-l-4 border-yellow-500 px-6 py-3 text-gray-200 font-mono text-center transition-all duration-300">
+            <h2 id="ui-title" class="text-xl font-bold text-yellow-500">初始化中...</h2>
+            <p id="ui-desc" class="text-sm mt-1">正在載入設定檔與 AR 引擎</p>
         </div>
     </div>
 
-    <!-- AR 場景 -->
-    <a-scene embedded arjs="sourceType: webcam; debugUIEnabled: false; detectionMode: mono_and_matrix; matrixCodeType: 3x3;">
+    <!-- AR 場景：注意這裡先不放 Marker，由 JS 根據 config.json 動態插入 -->
+    <a-scene id="main-scene" embedded arjs="sourceType: webcam; debugUIEnabled: false; detectionMode: mono_and_matrix; matrixCodeType: 3x3;">
         
         <a-assets>
-            <img id="ghost-img" src="" crossorigin="anonymous">
+            <img id="ghost-asset" src="" crossorigin="anonymous">
         </a-assets>
-
-        <!-- Marker 將由 JS 動態設定屬性 -->
-        <a-marker id="ghost-marker" preset="hiro">
-            
-            <!-- 靈異圖片疊加層 -->
-            <a-image 
-                id="overlay-image"
-                src="#ghost-img" 
-                rotation="-90 0 0" 
-                width="1" 
-                height="1"
-                opacity="0" 
-                position="0 0.1 0">
-            </a-image>
-
-            <!-- 血光濾鏡 -->
-            <a-plane 
-                id="blood-plane"
-                rotation="-90 0 0" 
-                width="1" 
-                height="1" 
-                color="#880000" 
-                opacity="0">
-            </a-plane>
-
-        </a-marker>
 
         <a-entity camera></a-entity>
     </a-scene>
 
     <script>
-        // 宣告全域變數
         let GAME_CONFIG = null;
         let isHaunted = false;
         let glitchInterval;
 
-        // DOM 元素
-        const marker = document.querySelector('#ghost-marker');
-        const ghostImgElement = document.querySelector('#ghost-img');
-        const overlayImage = document.querySelector('#overlay-image');
-        const bloodPlane = document.querySelector('#blood-plane');
+        // DOM 元素選取
+        const scene = document.querySelector('#main-scene');
+        const ghostAsset = document.querySelector('#ghost-asset');
         const uiTitle = document.querySelector('#ui-title');
         const uiDesc = document.querySelector('#ui-desc');
         const statusBox = document.querySelector('#status-box');
 
-        // 初始化：讀取 config.json
+        // 1. 程式進入點：讀取 config.json
         window.addEventListener('load', () => {
             fetch('config.json')
                 .then(response => {
-                    if (!response.ok) throw new Error("HTTP error " + response.status);
+                    if (!response.ok) throw new Error("無法讀取設定檔 (HTTP Error)");
                     return response.json();
                 })
                 .then(config => {
-                    console.log("設定檔載入成功", config);
+                    console.log("設定檔載入成功:", config);
                     GAME_CONFIG = config;
-                    applyConfig(config);
-                    setupEventListeners();
+                    initAR(config);
                 })
                 .catch(err => {
                     console.error("設定檔讀取失敗:", err);
-                    uiTitle.innerText = "讀取失敗";
-                    uiDesc.innerHTML = "無法讀取 config.json<br>請確認使用 Server 模式開啟";
-                    statusBox.classList.remove('border-red-600');
-                    statusBox.classList.add('border-yellow-500');
+                    uiTitle.innerText = "系統錯誤";
+                    uiDesc.innerHTML = "無法讀取 config.json<br>請確認是否使用 Server 開啟 (勿直接點兩下)";
+                    statusBox.classList.replace('border-yellow-500', 'border-red-600');
+                    document.querySelector('h2').classList.replace('text-yellow-500', 'text-red-500');
                 });
         });
 
-        // 將設定應用到 AR 場景
-        function applyConfig(config) {
-            // 1. 設定圖片來源
-            ghostImgElement.setAttribute('src', config.assets.ghostImage);
-
-            // 2. 設定 Marker 類型
+        // 2. 根據設定檔動態建立 AR 物件
+        function initAR(config) {
+            // 設定圖片資源
+            ghostAsset.setAttribute('src', config.assets.ghostImage);
+            
+            // 建立 Marker 元素
+            const marker = document.createElement('a-marker');
+            marker.setAttribute('id', 'ghost-marker');
+            
+            // 判斷識別圖類型 (Hiro 或 自訂)
+            // 如果 config 裡面指定了 pattern 並且有檔案路徑，就使用自訂圖
             if (config.assets.markerPreset === 'pattern' && config.assets.markerPatternUrl) {
-                marker.setAttribute('preset', 'pattern');
+                console.log("模式: 自訂識別圖", config.assets.markerPatternUrl);
                 marker.setAttribute('type', 'pattern');
+                marker.setAttribute('preset', 'pattern'); 
                 marker.setAttribute('url', config.assets.markerPatternUrl);
             } else {
+                console.log("模式: 預設 Hiro");
                 marker.setAttribute('preset', 'hiro');
             }
 
-            // 3. 設定尺寸與顏色
-            overlayImage.setAttribute('width', config.display.width);
-            overlayImage.setAttribute('height', config.display.height);
-            
-            bloodPlane.setAttribute('width', parseFloat(config.display.width) + 0.5); // 血光稍微大一點
-            bloodPlane.setAttribute('height', parseFloat(config.display.height) + 0.5);
-            bloodPlane.setAttribute('color', config.display.bloodColor);
+            // 建立靈異內容 (內部結構)
+            // 這裡會讀取 config.display 的長寬設定
+            marker.innerHTML = `
+                <a-image 
+                    id="overlay-image"
+                    src="#ghost-asset" 
+                    rotation="-90 0 0" 
+                    width="${config.display.width}" 
+                    height="${config.display.height}"
+                    opacity="0" 
+                    position="0 0.1 0">
+                </a-image>
+                <a-plane 
+                    id="blood-plane"
+                    rotation="-90 0 0" 
+                    width="${parseFloat(config.display.width) + 0.5}" 
+                    height="${parseFloat(config.display.height) + 0.5}" 
+                    color="${config.display.bloodColor}" 
+                    opacity="0">
+                </a-plane>
+            `;
 
-            // 4. 初始化 UI
+            // 將製作好的 Marker 加入場景
+            scene.appendChild(marker);
+
+            // 更新 UI 顯示為就緒狀態
             uiTitle.innerText = config.ui.title;
+            uiTitle.className = "text-xl font-bold text-red-500";
+            statusBox.className = "bg-black/70 border-l-4 border-red-600 px-6 py-3 text-gray-200 font-mono text-center";
             uiDesc.innerHTML = config.ui.scanningText;
+
+            // 綁定事件監聽器
+            setupEventListeners(marker);
         }
 
-        // 設定事件監聽
-        function setupEventListeners() {
+        // 3. 事件綁定：處理偵測到/遺失
+        function setupEventListeners(marker) {
+            const overlayImage = marker.querySelector('#overlay-image');
+            const bloodPlane = marker.querySelector('#blood-plane');
+
             marker.addEventListener('markerFound', () => {
                 if(!GAME_CONFIG) return;
                 uiDesc.innerHTML = GAME_CONFIG.ui.foundText;
                 uiDesc.classList.add('text-red-400', 'font-bold');
-                startHaunting();
+                startHaunting(overlayImage, bloodPlane);
             });
 
             marker.addEventListener('markerLost', () => {
                 if(!GAME_CONFIG) return;
                 uiDesc.innerHTML = GAME_CONFIG.ui.lostText;
                 uiDesc.classList.remove('text-red-400', 'font-bold');
-                stopHaunting();
+                stopHaunting(overlayImage, bloodPlane);
             });
         }
 
-        // 啟動靈異效果
-        function startHaunting() {
-            if (isHaunted || !GAME_CONFIG) return;
+        // 4. 靈異特效邏輯
+        function startHaunting(overlayImage, bloodPlane) {
+            if (isHaunted) return;
             isHaunted = true;
-
             const effects = GAME_CONFIG.effects;
 
-            // 淡入
+            // 淡入動畫
             let opacity = 0;
             const fadeIn = setInterval(() => {
                 opacity += effects.fadeInSpeed;
@@ -187,23 +187,23 @@
                 overlayImage.setAttribute('opacity', opacity);
             }, 100);
 
-            // 故障循環
+            // 故障與閃爍循環
             glitchInterval = setInterval(() => {
+                // 根據設定的機率發生故障
                 if (Math.random() > (1 - effects.glitchFrequency)) {
-                    // 抖動
+                    // 隨機位移
                     const jitterX = (Math.random() - 0.5) * effects.jitterAmount;
                     const jitterZ = (Math.random() - 0.5) * effects.jitterAmount;
-                    
                     overlayImage.setAttribute('position', `${jitterX} 0.15 ${jitterZ}`);
                     
                     // 隨機變色
                     const randomColor = Math.random() > 0.5 ? '#ffaaaa' : '#ffffff';
                     overlayImage.setAttribute('color', randomColor);
                     
-                    // 血光
+                    // 血光閃爍
                     bloodPlane.setAttribute('opacity', Math.random() * effects.bloodIntensity);
                 } else {
-                    // 恢復
+                    // 恢復穩定
                     overlayImage.setAttribute('position', '0 0.1 0');
                     overlayImage.setAttribute('color', '#ffffff');
                     bloodPlane.setAttribute('opacity', 0);
@@ -211,10 +211,11 @@
             }, 100);
         }
 
-        // 停止效果
-        function stopHaunting() {
+        // 5. 停止特效
+        function stopHaunting(overlayImage, bloodPlane) {
             isHaunted = false;
             clearInterval(glitchInterval);
+            // 重置所有屬性
             overlayImage.setAttribute('opacity', 0);
             overlayImage.setAttribute('position', '0 0.1 0');
             overlayImage.setAttribute('color', '#ffffff');
