@@ -1,6 +1,6 @@
 {
   "assets": {
-    "ghostImage": "https://raw.githubusercontent.com/AR-js-org/AR.js/master/data/images/pinball.png",
+    "ghostImage": "bird.png",
     "//_comment": "下方 markerPreset 若改為 'pattern'，則會讀取 markerPatternUrl 的檔案",
     "markerPreset": "pattern",
     "markerPatternUrl": "01.patt"
@@ -23,4 +23,5 @@
     "bloodIntensity": 0.4,
     "glitchFrequency": 0.7
   }
+
 }
