@@ -36,9 +36,10 @@
             100% { transform: rotate(0deg); }
         }
 
+        /* 透過 CSS 強制要求橫向 */
         @media screen and (orientation: portrait) {
             #portrait-blocker { display: flex !important; }
-            #game-container { visibility: hidden; }
+            #game-container { visibility: hidden; } 
         }
 
         /* 錯誤訊息 */
@@ -180,15 +181,17 @@
             backgroundImage: 'https://images.unsplash.com/photo-1519074069444-1ba4fff66d16?q=80&w=2574&auto=format&fit=crop',
             mask: { mode: 'svg', scale: 1.0, shapes: `<circle cx="50" cy="40" r="15" fill="black" /><path d="M50 40 L65 90 L35 90 Z" fill="black" />` },
             clue: { show: true, text: "DEMO", code: "9527", top: "15%", left: "15%", rotation: -5 },
-            gameplay: { maxMoveX: 50, maxMoveY: 50, smoothFactor: 0.3, limitAngle: 35 }
+            gameplay: { maxMoveX: 50, maxMoveY: 50, smoothFactor: 0.5, limitAngle: 35 }
         };
 
         let Config = null;
         let isRunning = false;
         
-        // 絕對座標變數
-        let startRawX = null;
-        let startRawY = null;
+        // 核心變數 (累加法)
+        let lastRawX = null;
+        let lastRawY = null;
+        let accumulatedX = 0;
+        let accumulatedY = 0;
         
         // 渲染變數
         let currentRenderX = 0;
@@ -216,7 +219,6 @@
             Config.gameplay.limitAngle = 35; 
             Config.gameplay.maxMoveX = 50;
             Config.gameplay.maxMoveY = 50;
-            // 提升 SmoothFactor 讓反應更即時
             Config.gameplay.smoothFactor = 0.5;
 
             if (Config.title) uiTitle.innerText = Config.title;
@@ -290,84 +292,94 @@
             
             isRunning = true;
             
-            // 重置初始參考點
-            startRawX = null;
-            startRawY = null;
+            // 重置累加器
+            lastRawX = null;
+            lastRawY = null;
+            accumulatedX = 0;
+            accumulatedY = 0;
 
             window.addEventListener('deviceorientation', handleOrientation);
             window.addEventListener('mousemove', handleMouse); 
-            // 螢幕旋轉後重置
+            // 螢幕旋轉後重置上一幀，避免瞬間跳躍
             window.addEventListener('orientationchange', () => {
-                setTimeout(() => { startRawX = null; }, 300);
+                setTimeout(() => { lastRawX = null; }, 300);
             });
 
             requestAnimationFrame(gameLoop);
         }
 
         // ==========================================
-        // [絕對座標鎖定法] 穩定不亂跳
+        // [修正版] 純淨累加法 (無過濾)
         // ==========================================
         function handleOrientation(e) {
-            // 由於我們用 CSS 強制橫式，這裡專注於橫式邏輯
-            // 但仍需偵測旋轉方向 (左轉90度 或 右轉-90度) 以對應正確軸向
+            // 由於有遮罩層擋住直式，這裡主要處理橫式邏輯
             const screenAngle = (screen.orientation && screen.orientation.angle) || window.orientation || 90;
             
-            let rawBeta = e.beta;   // 前後傾斜 (-180 ~ 180)
-            let rawGamma = e.gamma; // 左右傾斜 (-90 ~ 90)
+            let rawBeta = e.beta;   // -180 ~ 180
+            let rawGamma = e.gamma; // -90 ~ 90
 
             if (rawBeta === null || rawGamma === null) return;
 
             let inputX, inputY;
 
-            // 橫式判斷邏輯
+            // 橫式軸向判斷
             if (screenAngle === 90) { 
-                // Home 鍵在右 (beta -> X, -gamma -> Y)
                 inputX = rawBeta; 
                 inputY = -rawGamma; 
             } 
             else if (screenAngle === -90 || screenAngle === 270) { 
-                // Home 鍵在左 (-beta -> X, gamma -> Y)
                 inputX = -rawBeta;
                 inputY = rawGamma;
             } 
             else { 
-                // 直式 (暫停更新，等待轉回)
+                // 直式：雖然畫面看不到，但為了避免背景計算錯誤，暫停更新
                 return; 
             }
 
-            // 初始化參考點
-            if (startRawX === null || startRawY === null) {
-                startRawX = inputX;
-                startRawY = inputY;
+            // 初始化
+            if (lastRawX === null || lastRawY === null) {
+                lastRawX = inputX;
+                lastRawY = inputY;
                 return;
             }
 
-            // 計算與初始點的絕對差值 (Absolute Difference)
-            // 這種方式比累加法更穩定，因為它是基於固定的參考點
-            let diffX = inputX - startRawX;
-            let diffY = inputY - startRawY;
+            // 計算差異 (Delta)
+            let deltaX = inputX - lastRawX;
+            let deltaY = inputY - lastRawY;
 
-            // 處理橫式 Beta 軸的 +/-180 度翻轉問題
-            // 當裝置翻轉過頭時，數值會突變 (例如 170 -> -170)
-            if (diffX > 180) diffX -= 360;
-            if (diffX < -180) diffX += 360;
-            
-            // Gamma 軸通常在 +/- 90 內，不需要 wrap 處理
+            // [關鍵修正] 處理 180 度翻轉邊界 (Wrap-around Fix)
+            // 當數值從 179 跳到 -179 時，數學差是 -358
+            // 經過修正後，變為 +2，這樣畫面就會順暢地繼續往右移動，而不會反跳
+            if (deltaX > 180) deltaX -= 360;
+            if (deltaX < -180) deltaX += 360;
+            if (deltaY > 180) deltaY -= 360;
+            if (deltaY < -180) deltaY += 360;
 
-            // 限制最大角度 (Clamp) - 這是防止亂跳的關鍵
-            // 只要角度在安全範圍內 (limitAngle) 就更新，超過就停住
+            // [完全移除斷崖保護] 
+            // 我們相信 Delta 是正確的，即使轉得很快 (delta > 60)，也要跟上
+            // 這樣能徹底解決「卡住」的問題
+
+            // 累加
+            accumulatedX += deltaX;
+            accumulatedY += deltaY;
+
+            // 更新上一幀
+            lastRawX = inputX;
+            lastRawY = inputY;
+
+            // 限制最大可視範圍 (Soft Clamp)
             const lim = Config.gameplay.limitAngle || 35;
             
-            if (diffX > lim) diffX = lim;
-            if (diffX < -lim) diffX = -lim;
-            if (diffY > lim) diffY = lim;
-            if (diffY < -lim) diffY = -lim;
+            if (accumulatedX > lim) accumulatedX = lim;
+            if (accumulatedX < -lim) accumulatedX = -lim;
+            if (accumulatedY > lim) accumulatedY = lim;
+            if (accumulatedY < -lim) accumulatedY = -lim;
 
             // 計算目標 CSS 數值
-            targetX = (diffX / lim) * -Config.gameplay.maxMoveX;
-            targetY = (diffY / lim) * -Config.gameplay.maxMoveY;
+            targetX = (accumulatedX / lim) * -Config.gameplay.maxMoveX;
+            targetY = (accumulatedY / lim) * -Config.gameplay.maxMoveY;
 
-            debugText.innerText = `X: ${Math.round(diffX)} Y: ${Math.round(diffY)}`;
+            debugText.innerText = `X: ${Math.round(accumulatedX)} Y: ${Math.round(accumulatedY)}`;
         }
 
         function handleMouse(e) {
@@ -378,13 +390,13 @@
         function gameLoop() {
             if (!isRunning) return;
             
-            // 使用更高的平滑係數 (0.5) 讓反應即時
+            // 使用較高的平滑係數 (0.5)，讓反應即時，消除延遲感
             const sm = 0.5; 
             
             currentRenderX += (targetX - currentRenderX) * sm;
             currentRenderY += (targetY - currentRenderY) * sm;
 
-            // 微小數值吸附
+            // 微小數值吸附，節省運算
             if (Math.abs(targetX - currentRenderX) < 0.05) currentRenderX = targetX;
             if (Math.abs(targetY - currentRenderY) < 0.05) currentRenderY = targetY;
 
