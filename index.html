@@ -164,7 +164,8 @@
                 shapes: `<circle cx="50" cy="40" r="15" fill="black" /><path d="M50 40 L65 90 L35 90 Z" fill="black" />` 
             },
             clue: { show: true, text: "DEMO", code: "9527", top: "15%", left: "15%", rotation: -5 },
-            gameplay: { maxMoveX: 30, maxMoveY: 30, smoothFactor: 0.1, limitAngle: 40 }
+            // [修正] 將 limitAngle 從 40 改為 25，提高靈敏度 (越小越靈敏)
+            gameplay: { maxMoveX: 30, maxMoveY: 30, smoothFactor: 0.1, limitAngle: 25 }
         };
 
         let Config = null;
@@ -180,8 +181,10 @@
         // 濾波變數
         let lastInputX = 0;
         let lastInputY = 0;
-        let lastValidRawX = 0; // 改為 0 避免初始化 null 問題
-        let lastValidRawY = 0;
+        
+        // [修正] 改為 null，用於判斷是否為「第一次」接收數據
+        let lastValidRawX = null;
+        let lastValidRawY = null;
         
         // 渲染變數
         let currentX = 0;
@@ -204,6 +207,10 @@
                 debugText.innerText = "Mode: Fallback (Config Not Found)";
                 debugText.style.color = "yellow";
             }
+
+            // [安全檢查] 確保 gameplay 設定存在，避免讀取不到 limitAngle
+            if (!Config.gameplay) Config.gameplay = FallbackConfig.gameplay;
+            if (!Config.gameplay.limitAngle) Config.gameplay.limitAngle = 25; // 強制預設高靈敏度
 
             // 1. 套用 UI 設定
             if (Config.title) uiTitle.innerText = Config.title;
@@ -288,6 +295,12 @@
             
             isRunning = true;
             calibrateNextFrame = true; 
+            
+            // 重置狀態，避免殘留數據導致一開始就卡住
+            lastValidRawX = null;
+            lastValidRawY = null;
+            baseAngleX = null;
+            baseAngleY = null;
 
             window.addEventListener('deviceorientation', handleOrientation);
             window.addEventListener('mousemove', handleMouse); 
@@ -332,38 +345,39 @@
                 inputY = -rawBeta;
             }
             
-            // 3. [修正] 更嚴格的範圍限制
-            // 數值超過 65 度後，gamma 會開始變得極不穩定。將其限制在 65 度以內。
-            const SAFE_LIMIT = 65;
+            // 3. 範圍限制
+            const SAFE_LIMIT = 75;
             if (inputX > SAFE_LIMIT) inputX = SAFE_LIMIT;
             if (inputX < -SAFE_LIMIT) inputX = -SAFE_LIMIT;
             if (inputY > SAFE_LIMIT) inputY = SAFE_LIMIT;
             if (inputY < -SAFE_LIMIT) inputY = -SAFE_LIMIT;
 
-            // 4. [修正] 斷崖防護 (Cliff Protection)
-            // 當數值因為 Gimbal Lock 瞬間反轉 (例如 89 -> -89) 時，差異會非常大
-            // 我們設定一個 "最大合理跳躍值" (40度)，超過這個值就直接忽略該次更新
-            if (lastValidRawX !== null && lastValidRawY !== null) {
-                const diffX = Math.abs(inputX - lastValidRawX);
-                const diffY = Math.abs(inputY - lastValidRawY);
-                const GLITCH_THRESHOLD = 40; 
-
-                if (diffX > GLITCH_THRESHOLD || diffY > GLITCH_THRESHOLD) {
-                    // 偵測到不合理的巨大跳動，忽略這次數據，沿用上一次的值
-                    inputX = lastValidRawX;
-                    inputY = lastValidRawY;
-                }
+            // 4. [修正] 初始化與防暴衝
+            // 如果是第一次接收到數據 (null)，直接接受，不要檢查 diff
+            if (lastValidRawX === null || lastValidRawY === null) {
+                lastValidRawX = inputX;
+                lastValidRawY = inputY;
             }
 
-            // 5. [修正] 速度限制器 (Speed Limiter)
-            // 即使在合理範圍內，也限制每一幀的最大移動量，讓畫面更平滑，不會有"瞬移"感
-            const MAX_SPEED = 8; // 每幀最多轉動 8 度
+            // 5. [修正] 速度限制器 (放寬限制，避免感覺延遲)
+            const MAX_SPEED = 15; // 提高到 15 度，讓平板快速轉動時也能跟上
             
             let moveX = inputX - lastValidRawX;
             let moveY = inputY - lastValidRawY;
             
-            if (Math.abs(moveX) > MAX_SPEED) inputX = lastValidRawX + Math.sign(moveX) * MAX_SPEED;
-            if (Math.abs(moveY) > MAX_SPEED) inputY = lastValidRawY + Math.sign(moveY) * MAX_SPEED;
+            // 斷崖防護：如果單次跳變超過 45 度，可能是雜訊，忽略之
+            // 但如果持續發生，可能是真的轉很快，這裡做一個簡單的保護
+            if (Math.abs(moveX) < 45) {
+                if (Math.abs(moveX) > MAX_SPEED) inputX = lastValidRawX + Math.sign(moveX) * MAX_SPEED;
+            } else {
+                inputX = lastValidRawX; // 忽略雜訊
+            }
+
+            if (Math.abs(moveY) < 45) {
+                if (Math.abs(moveY) > MAX_SPEED) inputY = lastValidRawY + Math.sign(moveY) * MAX_SPEED;
+            } else {
+                inputY = lastValidRawY; // 忽略雜訊
+            }
             
             // 更新最後有效值
             lastValidRawX = inputX;
@@ -374,7 +388,7 @@
                 baseAngleX = inputX;
                 baseAngleY = inputY;
                 calibrateNextFrame = false;
-                debugText.innerText = "Recentered!";
+                debugText.innerText = "Center Set";
                 return;
             }
 
@@ -384,7 +398,7 @@
             let deltaX = inputX - baseAngleX;
             let deltaY = inputY - baseAngleY;
 
-            // 處理環繞 (雖有 clamp，保留以防萬一)
+            // 處理環繞
             if (deltaX > 180) deltaX -= 360;
             if (deltaX < -180) deltaX += 360;
             if (deltaY > 180) deltaY -= 360;
@@ -397,7 +411,8 @@
             lastInputY = lastInputY + (deltaY - lastInputY) * filterFactor;
 
             // 9. 計算最終位置
-            const lim = Config.gameplay.limitAngle || 40;
+            // [修正] 使用 Config 中的 limitAngle，若太小則使用預設值 25
+            const lim = Config.gameplay.limitAngle || 25;
             
             let finalX = lastInputX;
             let finalY = lastInputY;
