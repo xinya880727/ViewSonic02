@@ -154,8 +154,8 @@
             backgroundImage: 'https://images.unsplash.com/photo-1519074069444-1ba4fff66d16?q=80&w=2574&auto=format&fit=crop',
             mask: { mode: 'svg', scale: 1.0, shapes: `<circle cx="50" cy="40" r="15" fill="black" /><path d="M50 40 L65 90 L35 90 Z" fill="black" />` },
             clue: { show: true, text: "DEMO", code: "9527", top: "15%", left: "15%", rotation: -5 },
-            // maxMove 增加到 50，limitAngle 設為 25 (平衡靈敏度與穩定度)
-            gameplay: { maxMoveX: 50, maxMoveY: 50, smoothFactor: 0.1, limitAngle: 25 }
+            // maxMove 50, limitAngle 25, smoothFactor 0.25
+            gameplay: { maxMoveX: 50, maxMoveY: 50, smoothFactor: 0.25, limitAngle: 25 }
         };
 
         let Config = null;
@@ -264,7 +264,6 @@
             setTimeout(() => { startScreen.style.display = 'none'; }, 500);
             
             isRunning = true;
-            // 重置累積量，以當前位置為 0
             lastRawX = null;
             lastRawY = null;
             accumulatedX = 0;
@@ -272,22 +271,21 @@
 
             window.addEventListener('deviceorientation', handleOrientation);
             window.addEventListener('mousemove', handleMouse); 
-            // 監聽螢幕旋轉以修正座標系
             window.addEventListener('orientationchange', () => {
-                setTimeout(() => { lastRawX = null; }, 300); // 旋轉後重置上一幀，避免跳動
+                setTimeout(() => { lastRawX = null; }, 300);
             });
 
             requestAnimationFrame(gameLoop);
         }
 
         // ==========================================
-        // [終極演算法] 連續累加法 (Continuous Accumulation)
+        // [終極演算法] 無過濾、無斷崖、純累加
         // ==========================================
         function handleOrientation(e) {
             const screenAngle = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
             
-            let rawBeta = e.beta;   // -180 ~ 180
-            let rawGamma = e.gamma; // -90 ~ 90
+            let rawBeta = e.beta;   
+            let rawGamma = e.gamma; 
 
             if (rawBeta === null || rawGamma === null) return;
 
@@ -319,22 +317,17 @@
             let deltaX = inputX - lastRawX;
             let deltaY = inputY - lastRawY;
 
-            // 4. [關鍵] 處理邊界循環 (Wrap-around Logic)
-            // 如果變化量大於 180，表示跨越了 +/-180 的邊界
-            // 例如：從 179 變到 -179，數學差值是 -358，但實際只轉了 +2 度
+            // 4. 處理邊界循環 (Wrap-around Logic)
             if (deltaX > 180) deltaX -= 360;
             if (deltaX < -180) deltaX += 360;
             if (deltaY > 180) deltaY -= 360;
             if (deltaY < -180) deltaY += 360;
 
-            // 5. 斷崖過濾 (選用)
-            // 如果單幀變化真的太大 (超過 60度)，可能是雜訊，忽略之
-            // 但因為有 Wrap-around 修正，這裡只要過濾極端值即可
-            if (Math.abs(deltaX) > 60) deltaX = 0;
-            if (Math.abs(deltaY) > 60) deltaY = 0;
+            // 5. [關鍵修正] 移除任何「斷崖過濾」
+            // 只要變化不是數學上的 Wrap-around (已在步驟 4 處理)，我們就全盤接收。
+            // 這確保了快速移動時，畫面能 100% 跟上，不會有「卡住」或「被吃掉」的感覺。
 
             // 6. 累加變化量
-            // 這讓我們擁有一個連續的、沒有邊界的數值系統
             accumulatedX += deltaX;
             accumulatedY += deltaY;
 
@@ -342,12 +335,9 @@
             lastRawX = inputX;
             lastRawY = inputY;
 
-            // 8. 限制最終範圍 (Clamp)
-            // 為了不讓背景無限滾動，我們對「累積值」做限制
-            // 這裡使用了 limitAngle (25度)
+            // 8. 限制最終範圍 (Soft Clamp)
             const lim = Config.gameplay.limitAngle || 25;
             
-            // 使用「軟限制 (Soft Clamp)」：超過範圍後數值不再增加，但可以隨時轉回來
             if (accumulatedX > lim) accumulatedX = lim;
             if (accumulatedX < -lim) accumulatedX = -lim;
             if (accumulatedY > lim) accumulatedY = lim;
@@ -360,9 +350,8 @@
             debugText.innerText = `X: ${Math.round(accumulatedX)} Y: ${Math.round(accumulatedY)}`;
         }
 
-        // 滑鼠模擬 (測試用)
+        // 滑鼠模擬
         function handleMouse(e) {
-            // 滑鼠直接控制 Target，不經過累加邏輯
             targetX = ((e.clientX - window.innerWidth/2)/(window.innerWidth/2)) * -Config.gameplay.maxMoveX;
             targetY = ((e.clientY - window.innerHeight/2)/(window.innerHeight/2)) * -Config.gameplay.maxMoveY;
         }
@@ -371,14 +360,13 @@
         function gameLoop() {
             if (!isRunning) return;
             
-            // 視覺平滑 (Lerp)
-            // 數值越大越跟手 (0.2 是一個不錯的平衡點)
-            const sm = 0.2; 
+            // [關鍵修正] 提高平滑係數到 0.4，達到「即時跟手」的效果
+            const sm = 0.4; 
             
             currentRenderX += (targetX - currentRenderX) * sm;
             currentRenderY += (targetY - currentRenderY) * sm;
 
-            // 微小數值優化：如果差異極小，直接吸附，停止計算以省電
+            // 微小數值優化
             if (Math.abs(targetX - currentRenderX) < 0.05) currentRenderX = targetX;
             if (Math.abs(targetY - currentRenderY) < 0.05) currentRenderY = targetY;
 
