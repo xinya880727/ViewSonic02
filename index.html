@@ -58,6 +58,7 @@
         #room-layer {
             position: absolute; width: 120vw; height: 120vh; left: -10vw; top: -10vh;
             background-repeat: no-repeat; background-position: center center; background-size: cover;
+            /* 使用 translate3d 進行硬體加速，不加 transition 以免延遲 */
             will-change: transform; 
             z-index: 1;
         }
@@ -181,7 +182,7 @@
             backgroundImage: 'https://images.unsplash.com/photo-1519074069444-1ba4fff66d16?q=80&w=2574&auto=format&fit=crop',
             mask: { mode: 'svg', scale: 1.0, shapes: `<circle cx="50" cy="40" r="15" fill="black" /><path d="M50 40 L65 90 L35 90 Z" fill="black" />` },
             clue: { show: true, text: "DEMO", code: "9527", top: "15%", left: "15%", rotation: -5 },
-            gameplay: { maxMoveX: 50, maxMoveY: 50, smoothFactor: 0.5, limitAngle: 35 }
+            gameplay: { maxMoveX: 65, maxMoveY: 65, smoothFactor: 0.5, limitAngle: 30 }
         };
 
         let Config = null;
@@ -215,10 +216,11 @@
 
             if (!Config.gameplay) Config.gameplay = FallbackConfig.gameplay;
             
-            // 強制設定高效能參數
-            Config.gameplay.limitAngle = 35; 
-            Config.gameplay.maxMoveX = 50;
-            Config.gameplay.maxMoveY = 50;
+            // 強制優化參數
+            Config.gameplay.limitAngle = 30; 
+            Config.gameplay.maxMoveX = 65;
+            Config.gameplay.maxMoveY = 65;
+            // 提升 SmoothFactor 讓反應更即時
             Config.gameplay.smoothFactor = 0.5;
 
             if (Config.title) uiTitle.innerText = Config.title;
@@ -300,7 +302,6 @@
 
             window.addEventListener('deviceorientation', handleOrientation);
             window.addEventListener('mousemove', handleMouse); 
-            // 螢幕旋轉後重置上一幀，避免瞬間跳躍
             window.addEventListener('orientationchange', () => {
                 setTimeout(() => { lastRawX = null; }, 300);
             });
@@ -309,10 +310,9 @@
         }
 
         // ==========================================
-        // [修正版] 純淨累加法 (無過濾)
+        // [修正版] 軟性邊界 (Soft Boundary)
         // ==========================================
         function handleOrientation(e) {
-            // 由於有遮罩層擋住直式，這裡主要處理橫式邏輯
             const screenAngle = (screen.orientation && screen.orientation.angle) || window.orientation || 90;
             
             let rawBeta = e.beta;   // -180 ~ 180
@@ -331,33 +331,36 @@
                 inputX = -rawBeta;
                 inputY = rawGamma;
             } 
-            else { 
-                // 直式：雖然畫面看不到，但為了避免背景計算錯誤，暫停更新
-                return; 
-            }
+            else { return; }
 
-            // 初始化
             if (lastRawX === null || lastRawY === null) {
                 lastRawX = inputX;
                 lastRawY = inputY;
                 return;
             }
 
-            // 計算差異 (Delta)
+            // 計算差異
             let deltaX = inputX - lastRawX;
             let deltaY = inputY - lastRawY;
 
-            // [關鍵修正] 處理 180 度翻轉邊界 (Wrap-around Fix)
-            // 當數值從 179 跳到 -179 時，數學差是 -358
-            // 經過修正後，變為 +2，這樣畫面就會順暢地繼續往右移動，而不會反跳
+            // 處理環繞
             if (deltaX > 180) deltaX -= 360;
             if (deltaX < -180) deltaX += 360;
             if (deltaY > 180) deltaY -= 360;
             if (deltaY < -180) deltaY += 360;
 
-            // [完全移除斷崖保護] 
-            // 我們相信 Delta 是正確的，即使轉得很快 (delta > 60)，也要跟上
-            // 這樣能徹底解決「卡住」的問題
+            // [關鍵] 軟性邊界檢查
+            // 如果已經到達邊界，且還想往外衝 -> 忽略該次輸入 (delta = 0)
+            // 這能防止在邊緣時因為雜訊導致的來回跳動
+            const lim = Config.gameplay.limitAngle || 30;
+
+            // X 軸邊界保護
+            if (accumulatedX >= lim && deltaX > 0) deltaX = 0;
+            else if (accumulatedX <= -lim && deltaX < 0) deltaX = 0;
+
+            // Y 軸邊界保護
+            if (accumulatedY >= lim && deltaY > 0) deltaY = 0;
+            else if (accumulatedY <= -lim && deltaY < 0) deltaY = 0;
 
             // 累加
             accumulatedX += deltaX;
@@ -367,9 +370,7 @@
             lastRawX = inputX;
             lastRawY = inputY;
 
-            // 限制最大可視範圍 (Soft Clamp)
-            const lim = Config.gameplay.limitAngle || 35;
-            
+            // 硬限制 (最後一道防線，但因為有上面的軟性檢查，通常不會觸發彈跳)
             if (accumulatedX > lim) accumulatedX = lim;
             if (accumulatedX < -lim) accumulatedX = -lim;
             if (accumulatedY > lim) accumulatedY = lim;
@@ -390,13 +391,13 @@
         function gameLoop() {
             if (!isRunning) return;
             
-            // 使用較高的平滑係數 (0.5)，讓反應即時，消除延遲感
+            // 使用高平滑係數以保持即時感，消除延遲
             const sm = 0.5; 
             
             currentRenderX += (targetX - currentRenderX) * sm;
             currentRenderY += (targetY - currentRenderY) * sm;
 
-            // 微小數值吸附，節省運算
+            // 微小數值吸附
             if (Math.abs(targetX - currentRenderX) < 0.05) currentRenderX = targetX;
             if (Math.abs(targetY - currentRenderY) < 0.05) currentRenderY = targetY;
 
