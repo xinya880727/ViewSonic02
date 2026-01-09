@@ -84,14 +84,6 @@
         }
         button:hover { background: #d00; color: #fff; box-shadow: 0 0 20px #d00; }
         
-        /* 重新校正按鈕 (遊戲中顯示) */
-        #recenter-btn {
-            position: absolute; top: 20px; right: 20px; z-index: 50;
-            background: rgba(0,0,0,0.5); color: #fff; border: 1px solid #fff;
-            padding: 8px 15px; font-size: 14px; border-radius: 20px; cursor: pointer;
-            display: none; 
-        }
-        
         .debug-info { position: absolute; bottom: 10px; left: 10px; color: lime; font-size: 12px; z-index: 50; pointer-events: none; opacity: 0.6; }
     </style>
 </head>
@@ -131,9 +123,6 @@
             <img id="keyhole-image-layer" src="" alt="Mask" />
         </div>
 
-        <!-- 重新校正按鈕 -->
-        <div id="recenter-btn">⟳ 重設視角中心</div>
-
         <div id="start-screen">
             <h1 id="ui-title">窺視深淵</h1>
             <p id="ui-desc">...</p>
@@ -149,7 +138,6 @@
         const roomLayer = document.getElementById('room-layer');
         const startScreen = document.getElementById('start-screen');
         const startBtn = document.getElementById('start-btn');
-        const recenterBtn = document.getElementById('recenter-btn');
         const debugText = document.getElementById('debug');
         const errorOverlay = document.getElementById('error-overlay');
         const errorMsg = document.getElementById('error-msg');
@@ -294,15 +282,10 @@
             }
         });
         
-        recenterBtn.addEventListener('click', () => {
-            calibrateNextFrame = true;
-        });
-
         function startGame() {
             startScreen.style.opacity = '0';
             setTimeout(() => { startScreen.style.display = 'none'; }, 500);
             
-            recenterBtn.style.display = 'block';
             isRunning = true;
             calibrateNextFrame = true; 
 
@@ -317,7 +300,7 @@
         }
 
         // ==========================================
-        // [核心修正] 陀螺儀處理邏輯 - 解決卡死問題
+        // [核心修正] 陀螺儀處理邏輯
         // ==========================================
         function handleOrientation(e) {
             // 1. 取得螢幕方向
@@ -349,39 +332,44 @@
                 inputY = -rawBeta;
             }
             
-            // 3. [修正] 擴大安全範圍
-            // 範圍過小會導致看不到邊緣，這裡放寬到 75 度
-            const SAFE_LIMIT = 75;
+            // 3. [修正] 更嚴格的範圍限制
+            // 數值超過 65 度後，gamma 會開始變得極不穩定。將其限制在 65 度以內。
+            const SAFE_LIMIT = 65;
             if (inputX > SAFE_LIMIT) inputX = SAFE_LIMIT;
             if (inputX < -SAFE_LIMIT) inputX = -SAFE_LIMIT;
             if (inputY > SAFE_LIMIT) inputY = SAFE_LIMIT;
             if (inputY < -SAFE_LIMIT) inputY = -SAFE_LIMIT;
 
-            // 4. [修正] 速度限制器 (Speed Limiter) 代替防暴衝
-            // 之前是直接忽略，導致卡死。現在改為限制最大變化量。
-            // 這樣即使感測器瞬間跳變，畫面也只會快速滑過去，而不會卡住。
-            const MAX_SPEED = 10; // 每幀最大允許轉動角度
-            
-            // 計算與上一幀的差異
-            let diffX = inputX - lastValidRawX;
-            let diffY = inputY - lastValidRawY;
-            
-            // 限制 X 軸速度
-            if (Math.abs(diffX) > MAX_SPEED) {
-                // 如果變化太大，只允許移動 MAX_SPEED 的距離
-                inputX = lastValidRawX + Math.sign(diffX) * MAX_SPEED;
+            // 4. [修正] 斷崖防護 (Cliff Protection)
+            // 當數值因為 Gimbal Lock 瞬間反轉 (例如 89 -> -89) 時，差異會非常大
+            // 我們設定一個 "最大合理跳躍值" (40度)，超過這個值就直接忽略該次更新
+            if (lastValidRawX !== null && lastValidRawY !== null) {
+                const diffX = Math.abs(inputX - lastValidRawX);
+                const diffY = Math.abs(inputY - lastValidRawY);
+                const GLITCH_THRESHOLD = 40; 
+
+                if (diffX > GLITCH_THRESHOLD || diffY > GLITCH_THRESHOLD) {
+                    // 偵測到不合理的巨大跳動，忽略這次數據，沿用上一次的值
+                    inputX = lastValidRawX;
+                    inputY = lastValidRawY;
+                }
             }
+
+            // 5. [修正] 速度限制器 (Speed Limiter)
+            // 即使在合理範圍內，也限制每一幀的最大移動量，讓畫面更平滑，不會有"瞬移"感
+            const MAX_SPEED = 8; // 每幀最多轉動 8 度
             
-            // 限制 Y 軸速度
-            if (Math.abs(diffY) > MAX_SPEED) {
-                inputY = lastValidRawY + Math.sign(diffY) * MAX_SPEED;
-            }
+            let moveX = inputX - lastValidRawX;
+            let moveY = inputY - lastValidRawY;
             
-            // 更新最後有效值 (現在這個值永遠會跟上 inputX，不會死鎖)
+            if (Math.abs(moveX) > MAX_SPEED) inputX = lastValidRawX + Math.sign(moveX) * MAX_SPEED;
+            if (Math.abs(moveY) > MAX_SPEED) inputY = lastValidRawY + Math.sign(moveY) * MAX_SPEED;
+            
+            // 更新最後有效值
             lastValidRawX = inputX;
             lastValidRawY = inputY;
 
-            // 5. 校正邏輯
+            // 6. 校正邏輯
             if (calibrateNextFrame) {
                 baseAngleX = inputX;
                 baseAngleY = inputY;
@@ -392,31 +380,28 @@
 
             if (baseAngleX === null) return;
 
-            // 6. 計算相對角度
+            // 7. 計算相對角度
             let deltaX = inputX - baseAngleX;
             let deltaY = inputY - baseAngleY;
 
-            // 處理環繞
+            // 處理環繞 (雖有 clamp，保留以防萬一)
             if (deltaX > 180) deltaX -= 360;
             if (deltaX < -180) deltaX += 360;
             if (deltaY > 180) deltaY -= 360;
             if (deltaY < -180) deltaY += 360;
 
-            // 7. 低通濾波 (使畫面平滑)
-            // 稍微調高一點反應速度 (0.1 -> 0.15)
+            // 8. 低通濾波
             const filterFactor = 0.15; 
             
             lastInputX = lastInputX + (deltaX - lastInputX) * filterFactor;
             lastInputY = lastInputY + (deltaY - lastInputY) * filterFactor;
 
-            // 8. 計算最終位置
+            // 9. 計算最終位置
             const lim = Config.gameplay.limitAngle || 40;
             
-            // 這裡不再 clamp，允許稍微超出一點點以增加彈性，但 targetX 還是會被背景大小限制
             let finalX = lastInputX;
             let finalY = lastInputY;
 
-            // 限制在 limitAngle 範圍內，以免背景跑出去
             if (finalX > lim) finalX = lim;
             if (finalX < -lim) finalX = -lim;
             if (finalY > lim) finalY = lim;
