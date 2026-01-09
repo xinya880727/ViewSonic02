@@ -35,6 +35,7 @@
         #room-layer {
             position: absolute; width: 120vw; height: 120vh; left: -10vw; top: -10vh;
             background-repeat: no-repeat; background-position: center center; background-size: cover;
+            /* 重要：移除 CSS transition，完全交由 JS 控制以獲得最低延遲 */
             will-change: transform; 
             z-index: 1;
         }
@@ -164,8 +165,8 @@
                 shapes: `<circle cx="50" cy="40" r="15" fill="black" /><path d="M50 40 L65 90 L35 90 Z" fill="black" />` 
             },
             clue: { show: true, text: "DEMO", code: "9527", top: "15%", left: "15%", rotation: -5 },
-            // 維持較寬的移動範圍 (45) 和較高的靈敏度 (20)
-            gameplay: { maxMoveX: 45, maxMoveY: 45, smoothFactor: 0.1, limitAngle: 20 }
+            // 調高 smoothFactor (0.25) 以獲得即時反應
+            gameplay: { maxMoveX: 45, maxMoveY: 45, smoothFactor: 0.25, limitAngle: 25 }
         };
 
         let Config = null;
@@ -177,12 +178,6 @@
         // 陀螺儀核心變數
         let baseAngleX = null;
         let baseAngleY = null;
-        
-        // 濾波變數
-        let lastInputX = 0;
-        let lastInputY = 0;
-        let lastValidRawX = null;
-        let lastValidRawY = null;
         
         // 渲染變數
         let currentX = 0;
@@ -209,10 +204,12 @@
             // [安全檢查] 強制設定高效能參數
             if (!Config.gameplay) Config.gameplay = FallbackConfig.gameplay;
             
-            // 強制覆蓋舊設定，確保直式體驗流暢
-            if (Config.gameplay.limitAngle > 20) Config.gameplay.limitAngle = 20; 
+            // 強制覆蓋舊設定，確保體驗流暢
+            if (Config.gameplay.limitAngle > 25) Config.gameplay.limitAngle = 25; 
             if (Config.gameplay.maxMoveX < 45) Config.gameplay.maxMoveX = 45;
             if (Config.gameplay.maxMoveY < 45) Config.gameplay.maxMoveY = 45;
+            // 如果 smoothFactor 太小 (舊設定 0.1)，強制提升以解決「不即時」
+            if (Config.gameplay.smoothFactor < 0.2) Config.gameplay.smoothFactor = 0.25;
 
             // 1. 套用 UI 設定
             if (Config.title) uiTitle.innerText = Config.title;
@@ -298,9 +295,6 @@
             isRunning = true;
             calibrateNextFrame = true; 
             
-            // 重置狀態
-            lastValidRawX = null;
-            lastValidRawY = null;
             baseAngleX = null;
             baseAngleY = null;
 
@@ -315,8 +309,16 @@
         }
 
         // ==========================================
-        // [核心修正] 陀螺儀處理邏輯
+        // [核心修正] 陀螺儀處理邏輯 (無延遲版)
         // ==========================================
+        function getShortestRotation(angle, anchor) {
+            let diff = angle - anchor;
+            // 處理 +/- 180 度的循環跳變 (最短路徑)
+            while (diff <= -180) diff += 360;
+            while (diff > 180) diff -= 360;
+            return diff;
+        }
+
         function handleOrientation(e) {
             const screenAngle = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
             
@@ -346,81 +348,34 @@
                 inputY = -rawBeta;
             }
             
-            // 2. [優化] 安全範圍限制
-            // 70 度是一個安全且足夠廣的範圍，避開 90 度的數學死區
-            const SAFE_LIMIT = 70;
-            if (inputX > SAFE_LIMIT) inputX = SAFE_LIMIT;
-            if (inputX < -SAFE_LIMIT) inputX = -SAFE_LIMIT;
-            if (inputY > SAFE_LIMIT) inputY = SAFE_LIMIT;
-            if (inputY < -SAFE_LIMIT) inputY = -SAFE_LIMIT;
-
-            // 3. 初始化
-            if (lastValidRawX === null || lastValidRawY === null) {
-                lastValidRawX = inputX;
-                lastValidRawY = inputY;
-            }
-
-            // 4. [解決亂跳] 雙重過濾機制
-            // 變數 JUMP_THRESHOLD: 瞬間變化超過 50 度，視為「暴衝雜訊」，直接忽略
-            // 變數 MAX_SPEED: 瞬間變化限制在 30 度以內，這解決了「直式轉太快卡頓」的問題
-            const JUMP_THRESHOLD = 50; 
-            const MAX_SPEED = 30; // 提升到 30，讓快速轉動手腕時畫面也能跟上
-            
-            let diffX = inputX - lastValidRawX;
-            let diffY = inputY - lastValidRawY;
-            
-            // X 軸處理
-            if (Math.abs(diffX) > JUMP_THRESHOLD) {
-                // 差異過大 (例如翻轉)，忽略這次數據 (防亂跳)
-                inputX = lastValidRawX;
-            } else if (Math.abs(diffX) > MAX_SPEED) {
-                // 差異大但合理 (快速移動)，平滑追趕 (防卡頓)
-                inputX = lastValidRawX + Math.sign(diffX) * MAX_SPEED;
-            }
-            
-            // Y 軸處理
-            if (Math.abs(diffY) > JUMP_THRESHOLD) {
-                inputY = lastValidRawY;
-            } else if (Math.abs(diffY) > MAX_SPEED) {
-                inputY = lastValidRawY + Math.sign(diffY) * MAX_SPEED;
-            }
-            
-            // 更新狀態
-            lastValidRawX = inputX;
-            lastValidRawY = inputY;
-
-            // 5. 校正邏輯
+            // 2. 校正邏輯
             if (calibrateNextFrame) {
                 baseAngleX = inputX;
                 baseAngleY = inputY;
                 calibrateNextFrame = false;
-                debugText.innerText = "Calibrated";
+                debugText.innerText = "Ready";
                 return;
             }
 
             if (baseAngleX === null) return;
 
-            // 6. 計算相對角度
-            let deltaX = inputX - baseAngleX;
-            let deltaY = inputY - baseAngleY;
+            // 3. 計算相對角度 (使用最短路徑演算法防止亂跳)
+            // 這解決了橫式操作跨越 180 度邊界時的閃爍問題
+            let deltaX = getShortestRotation(inputX, baseAngleX);
+            let deltaY = getShortestRotation(inputY, baseAngleY);
 
-            // 處理環繞 (雖有 clamp，保留以防萬一)
-            if (deltaX > 180) deltaX -= 360;
-            if (deltaX < -180) deltaX += 360;
-            if (deltaY > 180) deltaY -= 360;
-            if (deltaY < -180) deltaY += 360;
-
-            // 7. 低通濾波 (平滑化)
-            const filterFactor = 0.15; 
-            lastInputX = lastInputX + (deltaX - lastInputX) * filterFactor;
-            lastInputY = lastInputY + (deltaY - lastInputY) * filterFactor;
-
-            // 8. 計算最終位置
+            // 4. [移除] 速度限制器與斷崖保護
+            // 為了「即時跟隨」，我們移除所有的人為限制。
+            // 現代瀏覽器的陀螺儀數據已經相當準確，過度過濾只會造成延遲。
+            
+            // 5. 計算最終位置
             const lim = Config.gameplay.limitAngle || 20;
             
-            let finalX = lastInputX;
-            let finalY = lastInputY;
+            let finalX = deltaX;
+            let finalY = deltaY;
 
+            // 限制最大角度 (Clamp)，避免背景跑出邊界
+            // 使用 Math.max/min 進行硬限制
             if (finalX > lim) finalX = lim;
             if (finalX < -lim) finalX = -lim;
             if (finalY > lim) finalY = lim;
@@ -443,14 +398,12 @@
         function gameLoop() {
             if (!isRunning) return;
             
-            const sm = Config.gameplay.smoothFactor || 0.1;
+            // 使用 config 中的 smoothFactor (建議 0.25 以上以獲得即時感)
+            const sm = Config.gameplay.smoothFactor || 0.25;
             
-            if (Math.abs(targetX - currentX) > 0.05) {
-                currentX += (targetX - currentX) * sm;
-            }
-            if (Math.abs(targetY - currentY) > 0.05) {
-                currentY += (targetY - currentY) * sm;
-            }
+            // 簡單的插值平滑，不設門檻，讓微小移動也能呈現
+            currentX += (targetX - currentX) * sm;
+            currentY += (targetY - currentY) * sm;
 
             roomLayer.style.transform = `translate3d(${currentX}vw, ${currentY}vh, 0)`;
             
