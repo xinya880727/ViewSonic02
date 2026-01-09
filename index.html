@@ -48,7 +48,7 @@
             border: 1px solid rgba(255, 255, 255, 0.2); box-shadow: 0 1px 3px rgba(0,0,0,0.2);
         }
 
-        /* === 遮罩容器 (統一管理 SVG 和 Image) === */
+        /* === 遮罩容器 === */
         #mask-container {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
             pointer-events: none; z-index: 10;
@@ -57,20 +57,19 @@
 
         /* 模式 A: SVG 遮罩 */
         #keyhole-svg { 
-            width: 100%; height: 100%; display: none; /* 預設隱藏 */
+            width: 100%; height: 100%; display: none; 
         }
         #mask-shape-group { transform-origin: 50px 50px; transition: transform 0.3s ease; }
 
         /* 模式 B: 圖片遮罩 */
         #keyhole-image-layer {
             width: 100%; height: 100%;
-            object-fit: cover; /* 讓圖片覆蓋整個畫面 */
-            display: none; /* 預設隱藏 */
+            object-fit: cover; 
+            display: none; 
             transition: transform 0.3s ease;
-            /* 圖片需要反轉效果嗎？不，這裡我們假設圖片本身就是「不透明的牆 + 透明的洞」 */
         }
 
-        /* 前景暗角 (Vignette) */
+        /* 前景暗角 */
         #vignette {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 11;
             background: radial-gradient(circle at center, transparent 10%, rgba(0,0,0,0.6) 50%, #000 80%);
@@ -104,20 +103,19 @@
             <button onclick="location.reload()" style="margin-top:20px;">重試</button>
         </div>
 
-        <!-- 1. 房間層 (Background) -->
+        <!-- 1. 房間層 -->
         <div id="room-layer">
             <div id="clue-element" class="clue-paper">
                 <div class="tape"></div>
                 <span id="clue-text"></span>
                 <strong id="clue-code"></strong>
             </div>
-            <!-- 模糊前景裝飾 -->
             <div style="position:absolute; bottom:20%; right:10%; width:200px; height:300px; background:rgba(0,0,0,0.6); filter:blur(20px);"></div>
         </div>
 
         <div id="vignette"></div>
 
-        <!-- 2. 遮罩層 (Mask) -->
+        <!-- 2. 遮罩層 -->
         <div id="mask-container">
             <!-- 模式 A: SVG -->
             <svg id="keyhole-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
@@ -129,8 +127,7 @@
                 </defs>
                 <rect x="0" y="0" width="100" height="100" fill="black" mask="url(#hole-mask)" />
             </svg>
-
-            <!-- 模式 B: 圖片 (PNG Transparency) -->
+            <!-- 模式 B: 圖片 -->
             <img id="keyhole-image-layer" src="" alt="Mask" />
         </div>
 
@@ -139,7 +136,7 @@
             <h1 id="ui-title">窺視深淵</h1>
             <p id="ui-desc">...</p>
             <button id="start-btn">開始</button>
-            <p style="font-size: 12px; color: #666; margin-top: 20px;">(需允許手機動作感測權限)</p>
+            <p style="font-size: 12px; color: #666; margin-top: 20px;">(建議使用 HTTPS 以確保平板支援)</p>
         </div>
 
         <div class="debug-info" id="debug">System Init...</div>
@@ -156,12 +153,9 @@
         const errorOverlay = document.getElementById('error-overlay');
         const errorMsg = document.getElementById('error-msg');
         
-        // Mask Elements
         const svgEl = document.getElementById('keyhole-svg');
         const maskGroup = document.getElementById('mask-shape-group');
         const imgEl = document.getElementById('keyhole-image-layer');
-        
-        // UI Elements
         const uiTitle = document.getElementById('ui-title');
         const uiDesc = document.getElementById('ui-desc');
 
@@ -171,11 +165,7 @@
             description: "房間的某個角落藏著一組密碼...",
             startButtonText: "開始窺視",
             backgroundImage: 'https://images.unsplash.com/photo-1519074069444-1ba4fff66d16?q=80&w=2574&auto=format&fit=crop',
-            mask: {
-                mode: 'svg',
-                scale: 1.0,
-                shapes: `<circle cx="50" cy="40" r="15" fill="black" /><path d="M50 40 L65 90 L35 90 Z" fill="black" />`
-            },
+            mask: { mode: 'svg', scale: 1.0, shapes: `<circle cx="50" cy="40" r="15" fill="black" /><path d="M50 40 L65 90 L35 90 Z" fill="black" />` },
             clue: { show: true, text: "DEMO", code: "9527", top: "15%", left: "15%", rotation: -5 },
             gameplay: { maxMoveX: 30, maxMoveY: 30, smoothFactor: 0.1, limitAngle: 40 }
         };
@@ -197,44 +187,31 @@
                 debugText.style.color = "yellow";
             }
 
-            // 1. UI Setup
+            // UI & Config Setup
             if (Config.title) uiTitle.innerText = Config.title;
             if (Config.description) uiDesc.innerText = Config.description;
             if (Config.startButtonText) startBtn.innerText = Config.startButtonText;
 
-            // 2. Mask Setup (The Core Logic)
-            // 檢查 mask 設定是否存在，不存在則用 Fallback
             const maskConfig = Config.mask || FallbackConfig.mask;
             const mode = maskConfig.mode || 'svg';
             const scale = maskConfig.scale || 1.0;
 
             if (mode === 'image') {
-                // --- 圖片模式 ---
                 svgEl.style.display = 'none';
                 imgEl.style.display = 'block';
-                
-                // 設定圖片來源
                 if (maskConfig.imageSrc) {
                     imgEl.src = maskConfig.imageSrc;
-                    // 套用縮放
                     imgEl.style.transform = `scale(${scale})`;
                 } else {
                     showError("Config Error: mask.mode 是 'image'，但沒有提供 mask.imageSrc");
                 }
-
             } else {
-                // --- SVG 模式 ---
                 imgEl.style.display = 'none';
                 svgEl.style.display = 'block';
-                
-                // 寫入形狀
-                const shapes = maskConfig.shapes || FallbackConfig.mask.shapes;
-                maskGroup.innerHTML = shapes;
-                // 套用縮放
+                maskGroup.innerHTML = maskConfig.shapes || FallbackConfig.mask.shapes;
                 maskGroup.style.transform = `scale(${scale})`;
             }
 
-            // 3. Load Background Image
             loadRoomImage(Config.backgroundImage);
         }
 
@@ -291,20 +268,75 @@
             setTimeout(() => { startScreen.style.display = 'none'; }, 500);
             isRunning = true;
             window.addEventListener('deviceorientation', handleOrientation);
+            // 監聽螢幕旋轉事件，確保即時更新
+            window.addEventListener('orientationchange', () => { 
+                // 某些瀏覽器需要一點時間更新 orientation 物件
+                setTimeout(() => {}, 200); 
+            });
             window.addEventListener('mousemove', handleMouse);
             requestAnimationFrame(gameLoop);
         }
 
+        // === [修正] 支援平板/手機橫向與直向的自動判斷 ===
         function handleOrientation(e) {
-            let x = e.gamma, y = e.beta;
+            // 取得目前螢幕角度 (兼容性寫法)
+            // 0: 直向, 90: 橫向(左轉), -90/270: 橫向(右轉), 180: 倒置
+            const angle = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
+
+            let x = e.gamma; // 左右傾斜 (預設直向)
+            let y = e.beta;  // 前後傾斜 (預設直向)
+
             if (x === null || y === null) return;
-            let cy = y - 45; 
+
+            let inputX, inputY;
+
+            // 根據螢幕角度重新映射 X/Y 軸
+            if (angle === 90) {
+                // 平板橫拿 (Home鍵在右 / 鏡頭在左)
+                // 此時前後傾斜 (Beta) 變成螢幕的左右移動
+                inputX = y;  
+                inputY = -x; 
+            } else if (angle === -90 || angle === 270) {
+                // 平板橫拿 (Home鍵在左 / 鏡頭在右)
+                inputX = -y;
+                inputY = x;
+            } else if (angle === 180) {
+                inputX = -x;
+                inputY = -y;
+            } else {
+                // 直向 (手機預設)
+                inputX = x;
+                inputY = y;
+            }
+
+            // 校正中心點
+            // 直向時，手持通常傾斜約 45 度 (Beta)，所以要扣掉 45 才是中心
+            // 橫向時，手持通常 Gamma 也會有傾角，但為了避免過度修正，
+            // 我們只對「直向」做強制校正，橫向則依賴相對移動或較小的修正。
+            let calibratedY = inputY;
+            if (angle === 0 || angle === 180) {
+                calibratedY = inputY - 45;
+            } 
+            // 如果您覺得平板橫拿時視角太偏上或偏下，可以在這裡對橫向做微調
+            // else { calibratedY = inputY - 30; } 
+
             const lim = Config.gameplay.limitAngle;
-            if (x > lim) x = lim; if (x < -lim) x = -lim;
-            if (cy > lim) cy = lim; if (cy < -lim) cy = -lim;
-            targetX = (x/lim) * -Config.gameplay.maxMoveX; 
-            targetY = (cy/lim) * -Config.gameplay.maxMoveY;
-            debugText.innerText = `G: ${Math.round(x)} ${Math.round(y)}`;
+
+            // 限制數值範圍
+            if (inputX > lim) inputX = lim;
+            if (inputX < -lim) inputX = -lim;
+            if (calibratedY > lim) calibratedY = lim;
+            if (calibratedY < -lim) calibratedY = -lim;
+
+            // 正規化並計算目標位置 (反向移動產生視差)
+            const normX = inputX / lim;
+            const normY = calibratedY / lim;
+
+            targetX = normX * -Config.gameplay.maxMoveX; 
+            targetY = normY * -Config.gameplay.maxMoveY;
+            
+            // Debug 資訊 (顯示角度幫助除錯)
+            debugText.innerText = `G: ${Math.round(x)} B: ${Math.round(y)} | Ang: ${angle}`;
         }
 
         function handleMouse(e) {
