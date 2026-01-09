@@ -164,7 +164,7 @@
                 shapes: `<circle cx="50" cy="40" r="15" fill="black" /><path d="M50 40 L65 90 L35 90 Z" fill="black" />` 
             },
             clue: { show: true, text: "DEMO", code: "9527", top: "15%", left: "15%", rotation: -5 },
-            // [修正] 提升移動範圍(maxMove 30->45) 與 靈敏度(limit 40->20)
+            // 維持較寬的移動範圍 (45) 和較高的靈敏度 (20)
             gameplay: { maxMoveX: 45, maxMoveY: 45, smoothFactor: 0.1, limitAngle: 20 }
         };
 
@@ -206,13 +206,13 @@
                 debugText.style.color = "yellow";
             }
 
-            // [安全檢查] 強制設定高效能參數，覆蓋可能過舊的 config.js
+            // [安全檢查] 強制設定高效能參數
             if (!Config.gameplay) Config.gameplay = FallbackConfig.gameplay;
             
-            // 如果使用預設設定，強制套用優化後的數值
-            if (Config.gameplay.limitAngle > 25) Config.gameplay.limitAngle = 20; 
-            if (Config.gameplay.maxMoveX < 40) Config.gameplay.maxMoveX = 45;
-            if (Config.gameplay.maxMoveY < 40) Config.gameplay.maxMoveY = 45;
+            // 強制覆蓋舊設定，確保直式體驗流暢
+            if (Config.gameplay.limitAngle > 20) Config.gameplay.limitAngle = 20; 
+            if (Config.gameplay.maxMoveX < 45) Config.gameplay.maxMoveX = 45;
+            if (Config.gameplay.maxMoveY < 45) Config.gameplay.maxMoveY = 45;
 
             // 1. 套用 UI 設定
             if (Config.title) uiTitle.innerText = Config.title;
@@ -254,7 +254,7 @@
 
         // === 套用遊戲參數 ===
         function applyConfig() {
-            // 背景尺寸：動態計算，確保不管怎麼移都不會露出黑邊
+            // 背景尺寸
             const safeBuffer = 10;
             const widthVW = 100 + (Config.gameplay.maxMoveX * 2) + safeBuffer; 
             const heightVH = 100 + (Config.gameplay.maxMoveY * 2) + safeBuffer;
@@ -346,37 +346,50 @@
                 inputY = -rawBeta;
             }
             
-            // 2. [修正] 移除可能導致卡死的嚴格斷崖防護
-            // 初始化：如果是第一幀，直接接受
+            // 2. [優化] 安全範圍限制
+            // 70 度是一個安全且足夠廣的範圍，避開 90 度的數學死區
+            const SAFE_LIMIT = 70;
+            if (inputX > SAFE_LIMIT) inputX = SAFE_LIMIT;
+            if (inputX < -SAFE_LIMIT) inputX = -SAFE_LIMIT;
+            if (inputY > SAFE_LIMIT) inputY = SAFE_LIMIT;
+            if (inputY < -SAFE_LIMIT) inputY = -SAFE_LIMIT;
+
+            // 3. 初始化
             if (lastValidRawX === null || lastValidRawY === null) {
                 lastValidRawX = inputX;
                 lastValidRawY = inputY;
             }
 
-            // 3. [修正] 柔性速度限制器 (Soft Speed Limiter)
-            // 永遠接受新的輸入方向，但限制每一幀的變化量 (Max Speed)
-            // 這保證了畫面永遠會動，絕不卡死，但過濾了極端跳動
-            const MAX_SPEED = 15; 
+            // 4. [解決亂跳] 雙重過濾機制
+            // 變數 JUMP_THRESHOLD: 瞬間變化超過 50 度，視為「暴衝雜訊」，直接忽略
+            // 變數 MAX_SPEED: 瞬間變化限制在 30 度以內，這解決了「直式轉太快卡頓」的問題
+            const JUMP_THRESHOLD = 50; 
+            const MAX_SPEED = 30; // 提升到 30，讓快速轉動手腕時畫面也能跟上
             
             let diffX = inputX - lastValidRawX;
             let diffY = inputY - lastValidRawY;
             
             // X 軸處理
-            if (Math.abs(diffX) > MAX_SPEED) {
-                // 如果跳動過大，只移動 MAX_SPEED 的距離，慢慢追過去
+            if (Math.abs(diffX) > JUMP_THRESHOLD) {
+                // 差異過大 (例如翻轉)，忽略這次數據 (防亂跳)
+                inputX = lastValidRawX;
+            } else if (Math.abs(diffX) > MAX_SPEED) {
+                // 差異大但合理 (快速移動)，平滑追趕 (防卡頓)
                 inputX = lastValidRawX + Math.sign(diffX) * MAX_SPEED;
             }
             
             // Y 軸處理
-            if (Math.abs(diffY) > MAX_SPEED) {
+            if (Math.abs(diffY) > JUMP_THRESHOLD) {
+                inputY = lastValidRawY;
+            } else if (Math.abs(diffY) > MAX_SPEED) {
                 inputY = lastValidRawY + Math.sign(diffY) * MAX_SPEED;
             }
             
-            // 更新狀態 (重要：這裡必須更新，否則會死鎖)
+            // 更新狀態
             lastValidRawX = inputX;
             lastValidRawY = inputY;
 
-            // 4. 校正邏輯
+            // 5. 校正邏輯
             if (calibrateNextFrame) {
                 baseAngleX = inputX;
                 baseAngleY = inputY;
@@ -387,29 +400,27 @@
 
             if (baseAngleX === null) return;
 
-            // 5. 計算相對角度
+            // 6. 計算相對角度
             let deltaX = inputX - baseAngleX;
             let deltaY = inputY - baseAngleY;
 
-            // 處理環繞
+            // 處理環繞 (雖有 clamp，保留以防萬一)
             if (deltaX > 180) deltaX -= 360;
             if (deltaX < -180) deltaX += 360;
             if (deltaY > 180) deltaY -= 360;
             if (deltaY < -180) deltaY += 360;
 
-            // 6. 低通濾波
+            // 7. 低通濾波 (平滑化)
             const filterFactor = 0.15; 
             lastInputX = lastInputX + (deltaX - lastInputX) * filterFactor;
             lastInputY = lastInputY + (deltaY - lastInputY) * filterFactor;
 
-            // 7. 計算最終位置
-            // 使用 limitAngle 決定靈敏度 (越小越靈敏)
+            // 8. 計算最終位置
             const lim = Config.gameplay.limitAngle || 20;
             
             let finalX = lastInputX;
             let finalY = lastInputY;
 
-            // 限制最大角度，避免穿幫
             if (finalX > lim) finalX = lim;
             if (finalX < -lim) finalX = -lim;
             if (finalY > lim) finalY = lim;
