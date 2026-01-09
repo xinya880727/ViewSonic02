@@ -35,7 +35,7 @@
         #room-layer {
             position: absolute; width: 120vw; height: 120vh; left: -10vw; top: -10vh;
             background-repeat: no-repeat; background-position: center center; background-size: cover;
-            /* 移除 transition 以獲得零延遲跟隨 */
+            /* 關鍵：關閉 CSS transition，完全交由 JS 的動態阻尼控制 */
             will-change: transform; 
             z-index: 1;
         }
@@ -154,18 +154,16 @@
             backgroundImage: 'https://images.unsplash.com/photo-1519074069444-1ba4fff66d16?q=80&w=2574&auto=format&fit=crop',
             mask: { mode: 'svg', scale: 1.0, shapes: `<circle cx="50" cy="40" r="15" fill="black" /><path d="M50 40 L65 90 L35 90 Z" fill="black" />` },
             clue: { show: true, text: "DEMO", code: "9527", top: "15%", left: "15%", rotation: -5 },
-            // maxMove 50, limitAngle 25, smoothFactor 0.25
-            gameplay: { maxMoveX: 50, maxMoveY: 50, smoothFactor: 0.25, limitAngle: 25 }
+            gameplay: { maxMoveX: 50, maxMoveY: 50, smoothFactor: 0.3, limitAngle: 35 }
         };
 
         let Config = null;
         let isRunning = false;
         
-        // --- 核心變數 (連續累加法) ---
         let lastRawX = null;
         let lastRawY = null;
-        let accumulatedX = 0; // 累積的 X 軸位移量
-        let accumulatedY = 0; // 累積的 Y 軸位移量
+        let accumulatedX = 0;
+        let accumulatedY = 0;
         
         // 渲染變數
         let currentRenderX = 0;
@@ -189,10 +187,9 @@
 
             if (!Config.gameplay) Config.gameplay = FallbackConfig.gameplay;
             
-            // 強制優化參數
-            Config.gameplay.limitAngle = 25; 
-            if (Config.gameplay.maxMoveX < 45) Config.gameplay.maxMoveX = 50;
-            if (Config.gameplay.maxMoveY < 45) Config.gameplay.maxMoveY = 50;
+            // 強制優化參數以解決卡頓與晃動
+            Config.gameplay.limitAngle = 35; // 範圍更大，直式更好操作
+            Config.gameplay.smoothFactor = 0.3; // 基礎反應速度
 
             if (Config.title) uiTitle.innerText = Config.title;
             if (Config.description) uiDesc.innerText = Config.description;
@@ -278,9 +275,6 @@
             requestAnimationFrame(gameLoop);
         }
 
-        // ==========================================
-        // [終極演算法] 無過濾、無斷崖、純累加
-        // ==========================================
         function handleOrientation(e) {
             const screenAngle = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
             
@@ -289,16 +283,16 @@
 
             if (rawBeta === null || rawGamma === null) return;
 
-            // 1. 根據螢幕方向取得正確的 XY 輸入
             let inputX, inputY;
 
             if (screenAngle === 0) { // 直向
-                inputX = rawGamma;
+                // 直式優化：將 gamma 限制在 -85~85，避免接近 90 度時數值翻轉導致卡頓
+                inputX = Math.max(-85, Math.min(85, rawGamma));
                 inputY = rawBeta;
-            } else if (screenAngle === 90) { // 橫向 (左)
+            } else if (screenAngle === 90) { // 橫向
                 inputX = rawBeta; 
                 inputY = -rawGamma;
-            } else if (screenAngle === -90 || screenAngle === 270) { // 橫向 (右)
+            } else if (screenAngle === -90 || screenAngle === 270) { // 橫向
                 inputX = -rawBeta;
                 inputY = rawGamma;
             } else { 
@@ -306,69 +300,71 @@
                 inputY = -rawBeta;
             }
 
-            // 2. 初始化上一幀數據
             if (lastRawX === null || lastRawY === null) {
                 lastRawX = inputX;
                 lastRawY = inputY;
                 return;
             }
 
-            // 3. 計算變化量 (Delta)
             let deltaX = inputX - lastRawX;
             let deltaY = inputY - lastRawY;
 
-            // 4. 處理邊界循環 (Wrap-around Logic)
+            // 處理環繞
             if (deltaX > 180) deltaX -= 360;
             if (deltaX < -180) deltaX += 360;
             if (deltaY > 180) deltaY -= 360;
             if (deltaY < -180) deltaY += 360;
 
-            // 5. [關鍵修正] 移除任何「斷崖過濾」
-            // 只要變化不是數學上的 Wrap-around (已在步驟 4 處理)，我們就全盤接收。
-            // 這確保了快速移動時，畫面能 100% 跟上，不會有「卡住」或「被吃掉」的感覺。
+            // [解決晃動] 微動濾波器 (Micro-movement Filter)
+            // 如果變化量極小 (小於 0.08 度)，視為雜訊，直接忽略
+            // 這能有效消除手持時的「不明晃動」
+            if (Math.abs(deltaX) < 0.08) deltaX = 0;
+            if (Math.abs(deltaY) < 0.08) deltaY = 0;
 
-            // 6. 累加變化量
             accumulatedX += deltaX;
             accumulatedY += deltaY;
 
-            // 7. 更新上一幀
             lastRawX = inputX;
             lastRawY = inputY;
 
-            // 8. 限制最終範圍 (Soft Clamp)
-            const lim = Config.gameplay.limitAngle || 25;
+            // 限制範圍 (Soft Clamp)
+            const lim = Config.gameplay.limitAngle || 35;
             
             if (accumulatedX > lim) accumulatedX = lim;
             if (accumulatedX < -lim) accumulatedX = -lim;
             if (accumulatedY > lim) accumulatedY = lim;
             if (accumulatedY < -lim) accumulatedY = -lim;
 
-            // 9. 計算目標位置
             targetX = (accumulatedX / lim) * -Config.gameplay.maxMoveX;
             targetY = (accumulatedY / lim) * -Config.gameplay.maxMoveY;
 
             debugText.innerText = `X: ${Math.round(accumulatedX)} Y: ${Math.round(accumulatedY)}`;
         }
 
-        // 滑鼠模擬
         function handleMouse(e) {
             targetX = ((e.clientX - window.innerWidth/2)/(window.innerWidth/2)) * -Config.gameplay.maxMoveX;
             targetY = ((e.clientY - window.innerHeight/2)/(window.innerHeight/2)) * -Config.gameplay.maxMoveY;
         }
 
-        // 渲染迴圈
         function gameLoop() {
             if (!isRunning) return;
             
-            // [關鍵修正] 提高平滑係數到 0.4，達到「即時跟手」的效果
-            const sm = 0.4; 
+            // [解決卡頓] 動態阻尼 (Dynamic Damping)
+            // 計算目前位置與目標位置的距離
+            let dist = Math.sqrt(Math.pow(targetX - currentRenderX, 2) + Math.pow(targetY - currentRenderY, 2));
             
-            currentRenderX += (targetX - currentRenderX) * sm;
-            currentRenderY += (targetY - currentRenderY) * sm;
-
-            // 微小數值優化
-            if (Math.abs(targetX - currentRenderX) < 0.05) currentRenderX = targetX;
-            if (Math.abs(targetY - currentRenderY) < 0.05) currentRenderY = targetY;
+            // 如果距離大 (快速移動)，使用極高的平滑係數 (0.3~0.4)，幾乎無延遲
+            // 如果距離小 (慢速微調)，降低係數 (0.1)，讓畫面穩定不抖
+            let sm = (dist > 1.0) ? 0.3 : 0.1;
+            
+            // 極小距離吸附 (避免最後 1px 的顫抖)
+            if (dist < 0.05) {
+                currentRenderX = targetX;
+                currentRenderY = targetY;
+            } else {
+                currentRenderX += (targetX - currentRenderX) * sm;
+                currentRenderY += (targetY - currentRenderY) * sm;
+            }
 
             roomLayer.style.transform = `translate3d(${currentRenderX}vw, ${currentRenderY}vh, 0)`;
             
