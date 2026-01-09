@@ -21,8 +21,7 @@
 
         /* === 強制橫式提示層 === */
         #portrait-blocker {
-            display: none; /* 預設隱藏 */
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             background: #111; z-index: 99999;
             flex-direction: column; justify-content: center; align-items: center;
             color: #fff; text-align: center;
@@ -37,10 +36,9 @@
             100% { transform: rotate(0deg); }
         }
 
-        /* 透過 CSS Media Query 偵測直式，強制顯示遮罩 */
         @media screen and (orientation: portrait) {
             #portrait-blocker { display: flex !important; }
-            #game-container { visibility: hidden; } /* 隱藏遊戲內容但保留結構 */
+            #game-container { visibility: hidden; }
         }
 
         /* 錯誤訊息 */
@@ -112,7 +110,6 @@
 </head>
 <body>
 
-    <!-- 直式阻擋層 -->
     <div id="portrait-blocker">
         <div class="icon">📱 ↪️</div>
         <p>為了最佳體驗<br>請將裝置轉為橫向 (Landscape)</p>
@@ -189,10 +186,9 @@
         let Config = null;
         let isRunning = false;
         
-        let lastRawX = null;
-        let lastRawY = null;
-        let accumulatedX = 0;
-        let accumulatedY = 0;
+        // 絕對座標變數
+        let startRawX = null;
+        let startRawY = null;
         
         // 渲染變數
         let currentRenderX = 0;
@@ -220,7 +216,8 @@
             Config.gameplay.limitAngle = 35; 
             Config.gameplay.maxMoveX = 50;
             Config.gameplay.maxMoveY = 50;
-            Config.gameplay.smoothFactor = 0.3;
+            // 提升 SmoothFactor 讓反應更即時
+            Config.gameplay.smoothFactor = 0.5;
 
             if (Config.title) uiTitle.innerText = Config.title;
             if (Config.description) uiDesc.innerText = Config.description;
@@ -293,24 +290,26 @@
             
             isRunning = true;
             
-            // 重置所有數值
-            lastRawX = null;
-            lastRawY = null;
-            accumulatedX = 0;
-            accumulatedY = 0;
+            // 重置初始參考點
+            startRawX = null;
+            startRawY = null;
 
             window.addEventListener('deviceorientation', handleOrientation);
             window.addEventListener('mousemove', handleMouse); 
+            // 螢幕旋轉後重置
+            window.addEventListener('orientationchange', () => {
+                setTimeout(() => { startRawX = null; }, 300);
+            });
+
             requestAnimationFrame(gameLoop);
         }
 
         // ==========================================
-        // [橫式專用] 陀螺儀處理邏輯
+        // [絕對座標鎖定法] 穩定不亂跳
         // ==========================================
         function handleOrientation(e) {
-            // 由於我們用 CSS 強制橫式，這裡假設玩家已經將裝置轉橫
-            // 但我們仍需偵測旋轉方向 (左轉90度 或 右轉-90度) 來決定軸向正負
-            
+            // 由於我們用 CSS 強制橫式，這裡專注於橫式邏輯
+            // 但仍需偵測旋轉方向 (左轉90度 或 右轉-90度) 以對應正確軸向
             const screenAngle = (screen.orientation && screen.orientation.angle) || window.orientation || 90;
             
             let rawBeta = e.beta;   // 前後傾斜 (-180 ~ 180)
@@ -320,64 +319,55 @@
 
             let inputX, inputY;
 
-            // 橫式判斷邏輯 (Landscape Logic Only)
+            // 橫式判斷邏輯
             if (screenAngle === 90) { 
-                // Home 鍵在右 / 鏡頭在左 (最常見)
-                // Beta 控制 X 軸 (左右)，Gamma 控制 Y 軸 (上下)
+                // Home 鍵在右 (beta -> X, -gamma -> Y)
                 inputX = rawBeta; 
                 inputY = -rawGamma; 
             } 
             else if (screenAngle === -90 || screenAngle === 270) { 
-                // Home 鍵在左 / 鏡頭在右
+                // Home 鍵在左 (-beta -> X, gamma -> Y)
                 inputX = -rawBeta;
                 inputY = rawGamma;
             } 
             else { 
-                // 如果玩家還在直式 (雖然被 CSS 擋住了)，我們暫停更新
-                // 直到他轉回來
+                // 直式 (暫停更新，等待轉回)
                 return; 
             }
 
-            // 初始化上一幀
-            if (lastRawX === null || lastRawY === null) {
-                lastRawX = inputX;
-                lastRawY = inputY;
+            // 初始化參考點
+            if (startRawX === null || startRawY === null) {
+                startRawX = inputX;
+                startRawY = inputY;
                 return;
             }
 
-            // 計算變化量 (Delta)
-            let deltaX = inputX - lastRawX;
-            let deltaY = inputY - lastRawY;
+            // 計算與初始點的絕對差值 (Absolute Difference)
+            // 這種方式比累加法更穩定，因為它是基於固定的參考點
+            let diffX = inputX - startRawX;
+            let diffY = inputY - startRawY;
 
-            // [關鍵] 處理橫式翻轉的邊界問題 (+/- 180度)
-            // 當裝置翻面時，Beta 會在 180 和 -180 之間跳變
-            if (deltaX > 180) deltaX -= 360;
-            if (deltaX < -180) deltaX += 360;
-            if (deltaY > 180) deltaY -= 360;
-            if (deltaY < -180) deltaY += 360;
+            // 處理橫式 Beta 軸的 +/-180 度翻轉問題
+            // 當裝置翻轉過頭時，數值會突變 (例如 170 -> -170)
+            if (diffX > 180) diffX -= 360;
+            if (diffX < -180) diffX += 360;
+            
+            // Gamma 軸通常在 +/- 90 內，不需要 wrap 處理
 
-            // 累加變化量 (累積角度)
-            // 這種方式可以無限旋轉，不會被絕對座標限制住，解決了邊緣亂跳問題
-            accumulatedX += deltaX;
-            accumulatedY += deltaY;
-
-            // 更新上一幀
-            lastRawX = inputX;
-            lastRawY = inputY;
-
-            // 限制最大可視範圍 (Soft Clamp)
+            // 限制最大角度 (Clamp) - 這是防止亂跳的關鍵
+            // 只要角度在安全範圍內 (limitAngle) 就更新，超過就停住
             const lim = Config.gameplay.limitAngle || 35;
             
-            if (accumulatedX > lim) accumulatedX = lim;
-            if (accumulatedX < -lim) accumulatedX = -lim;
-            if (accumulatedY > lim) accumulatedY = lim;
-            if (accumulatedY < -lim) accumulatedY = -lim;
+            if (diffX > lim) diffX = lim;
+            if (diffX < -lim) diffX = -lim;
+            if (diffY > lim) diffY = lim;
+            if (diffY < -lim) diffY = -lim;
 
             // 計算目標 CSS 數值
-            targetX = (accumulatedX / lim) * -Config.gameplay.maxMoveX;
-            targetY = (accumulatedY / lim) * -Config.gameplay.maxMoveY;
+            targetX = (diffX / lim) * -Config.gameplay.maxMoveX;
+            targetY = (diffY / lim) * -Config.gameplay.maxMoveY;
 
-            debugText.innerText = `X: ${Math.round(accumulatedX)} Y: ${Math.round(accumulatedY)}`;
+            debugText.innerText = `X: ${Math.round(diffX)} Y: ${Math.round(diffY)}`;
         }
 
         function handleMouse(e) {
@@ -388,17 +378,15 @@
         function gameLoop() {
             if (!isRunning) return;
             
-            // 動態平滑係數：根據距離動態調整，兼顧穩定與反應
-            let dist = Math.sqrt(Math.pow(targetX - currentRenderX, 2) + Math.pow(targetY - currentRenderY, 2));
-            let sm = (dist > 1.0) ? 0.3 : 0.15; // 大動快追，小動慢修
+            // 使用更高的平滑係數 (0.5) 讓反應即時
+            const sm = 0.5; 
             
-            if (dist < 0.05) {
-                currentRenderX = targetX;
-                currentRenderY = targetY;
-            } else {
-                currentRenderX += (targetX - currentRenderX) * sm;
-                currentRenderY += (targetY - currentRenderY) * sm;
-            }
+            currentRenderX += (targetX - currentRenderX) * sm;
+            currentRenderY += (targetY - currentRenderY) * sm;
+
+            // 微小數值吸附
+            if (Math.abs(targetX - currentRenderX) < 0.05) currentRenderX = targetX;
+            if (Math.abs(targetY - currentRenderY) < 0.05) currentRenderY = targetY;
 
             roomLayer.style.transform = `translate3d(${currentRenderX}vw, ${currentRenderY}vh, 0)`;
             
