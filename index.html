@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>鑰匙孔偷窺解謎</title>
     
-    <!-- 引入設定檔，若失敗則標記錯誤 -->
+    <!-- 引入設定檔 -->
     <script src="config.js" onerror="window.configLoadError = true;"></script>
     
     <style>
@@ -31,11 +31,11 @@
             max-width: 90%; white-space: pre-wrap; font-size: 16px; line-height: 1.6; text-align: left;
         }
 
-        /* 遊戲圖層 (房間背景) */
+        /* 遊戲圖層 */
         #room-layer {
             position: absolute; width: 120vw; height: 120vh; left: -10vw; top: -10vh;
             background-repeat: no-repeat; background-position: center center; background-size: cover;
-            /* 重要：移除 CSS transition，完全交由 JS 控制以獲得最低延遲 */
+            /* 移除 transition 以獲得零延遲跟隨 */
             will-change: transform; 
             z-index: 1;
         }
@@ -64,13 +64,12 @@
             width: 100%; height: 100%; object-fit: cover; display: none; transition: transform 0.3s ease;
         }
 
-        /* 暗角 */
         #vignette {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 11;
             background: radial-gradient(circle at center, transparent 10%, rgba(0,0,0,0.6) 50%, #000 80%);
         }
 
-        /* 開始畫面 */
+        /* UI 層 */
         #start-screen {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
             background: rgba(0,0,0,0.95); display: flex; flex-direction: column;
@@ -91,21 +90,18 @@
 <body>
 
     <div id="game-container">
-        <!-- 錯誤提示 -->
         <div id="error-overlay">
             <h2 style="color:#fff">⚠️ 發生錯誤</h2>
             <div id="error-msg"></div>
             <button onclick="location.reload()" style="margin-top:20px;">重試</button>
         </div>
 
-        <!-- 遊戲內容 -->
         <div id="room-layer">
             <div id="clue-element" class="clue-paper">
                 <div class="tape"></div>
                 <span id="clue-text"></span>
                 <strong id="clue-code"></strong>
             </div>
-            <!-- 模糊前景 -->
             <div style="position:absolute; bottom:20%; right:10%; width:200px; height:300px; background:rgba(0,0,0,0.6); filter:blur(20px);"></div>
         </div>
 
@@ -128,14 +124,13 @@
             <h1 id="ui-title">窺視深淵</h1>
             <p id="ui-desc">...</p>
             <button id="start-btn">開始</button>
-            <p style="font-size: 14px; color: #666; margin-top: 20px;"></p>
+            <p style="font-size: 12px; color: #666; margin-top: 20px;">(建議使用 HTTPS 以確保平板支援)</p>
         </div>
 
         <div class="debug-info" id="debug">System Init...</div>
     </div>
 
     <script>
-        // === DOM Elements ===
         const roomLayer = document.getElementById('room-layer');
         const startScreen = document.getElementById('start-screen');
         const startBtn = document.getElementById('start-btn');
@@ -143,7 +138,6 @@
         const errorOverlay = document.getElementById('error-overlay');
         const errorMsg = document.getElementById('error-msg');
         
-        // UI Elements
         const clueEl = document.getElementById('clue-element');
         const clueTextEl = document.getElementById('clue-text');
         const clueCodeEl = document.getElementById('clue-code');
@@ -153,70 +147,57 @@
         const maskGroup = document.getElementById('mask-shape-group');
         const imgEl = document.getElementById('keyhole-image-layer');
 
-        // === 內建備用設定 (Fallback Config) ===
         const FallbackConfig = {
             title: "窺視深淵",
             description: "房間的某個角落藏著一組密碼...",
             startButtonText: "開始窺視",
             backgroundImage: 'https://images.unsplash.com/photo-1519074069444-1ba4fff66d16?q=80&w=2574&auto=format&fit=crop',
-            mask: { 
-                mode: 'svg', 
-                scale: 1.0, 
-                shapes: `<circle cx="50" cy="40" r="15" fill="black" /><path d="M50 40 L65 90 L35 90 Z" fill="black" />` 
-            },
+            mask: { mode: 'svg', scale: 1.0, shapes: `<circle cx="50" cy="40" r="15" fill="black" /><path d="M50 40 L65 90 L35 90 Z" fill="black" />` },
             clue: { show: true, text: "DEMO", code: "9527", top: "15%", left: "15%", rotation: -5 },
-            // 調高 smoothFactor (0.25) 以獲得即時反應
-            gameplay: { maxMoveX: 45, maxMoveY: 45, smoothFactor: 0.25, limitAngle: 25 }
+            // maxMove 增加到 50，limitAngle 設為 25 (平衡靈敏度與穩定度)
+            gameplay: { maxMoveX: 50, maxMoveY: 50, smoothFactor: 0.1, limitAngle: 25 }
         };
 
         let Config = null;
-        
-        // === 遊戲變數 ===
         let isRunning = false;
-        let calibrateNextFrame = false;
         
-        // 陀螺儀核心變數
-        let baseAngleX = null;
-        let baseAngleY = null;
+        // --- 核心變數 (連續累加法) ---
+        let lastRawX = null;
+        let lastRawY = null;
+        let accumulatedX = 0; // 累積的 X 軸位移量
+        let accumulatedY = 0; // 累積的 Y 軸位移量
         
         // 渲染變數
-        let currentX = 0;
-        let currentY = 0;
+        let currentRenderX = 0;
+        let currentRenderY = 0;
         let targetX = 0;
         let targetY = 0;
 
-        // === 錯誤處理 ===
         function showError(msg) {
             errorOverlay.style.display = 'flex';
             errorMsg.innerText = msg;
             startScreen.style.display = 'none';
         }
 
-        // === 系統初始化 ===
         function initSystem() {
             Config = (typeof GameConfig !== 'undefined') ? GameConfig : FallbackConfig;
             
             if (typeof GameConfig === 'undefined') {
-                debugText.innerText = "Mode: Fallback (Config Not Found)";
+                debugText.innerText = "Mode: Fallback";
                 debugText.style.color = "yellow";
             }
 
-            // [安全檢查] 強制設定高效能參數
             if (!Config.gameplay) Config.gameplay = FallbackConfig.gameplay;
             
-            // 強制覆蓋舊設定，確保體驗流暢
-            if (Config.gameplay.limitAngle > 25) Config.gameplay.limitAngle = 25; 
-            if (Config.gameplay.maxMoveX < 45) Config.gameplay.maxMoveX = 45;
-            if (Config.gameplay.maxMoveY < 45) Config.gameplay.maxMoveY = 45;
-            // 如果 smoothFactor 太小 (舊設定 0.1)，強制提升以解決「不即時」
-            if (Config.gameplay.smoothFactor < 0.2) Config.gameplay.smoothFactor = 0.25;
+            // 強制優化參數
+            Config.gameplay.limitAngle = 25; 
+            if (Config.gameplay.maxMoveX < 45) Config.gameplay.maxMoveX = 50;
+            if (Config.gameplay.maxMoveY < 45) Config.gameplay.maxMoveY = 50;
 
-            // 1. 套用 UI 設定
             if (Config.title) uiTitle.innerText = Config.title;
             if (Config.description) uiDesc.innerText = Config.description;
             if (Config.startButtonText) startBtn.innerText = Config.startButtonText;
 
-            // 2. 套用遮罩設定
             const maskConfig = Config.mask || FallbackConfig.mask;
             const mode = maskConfig.mode || 'svg';
             const scale = maskConfig.scale || 1.0;
@@ -235,7 +216,6 @@
                 maskGroup.style.transform = `scale(${scale})`;
             }
 
-            // 3. 載入圖片
             const imgUrl = Config.backgroundImage || FallbackConfig.backgroundImage;
             const testImg = new Image();
             testImg.onload = () => {
@@ -243,15 +223,11 @@
                 if(Config === GameConfig) debugText.innerText = "System Ready.";
                 applyConfig();
             };
-            testImg.onerror = () => { 
-                showError(`無法載入背景圖片：${imgUrl}\n請檢查路徑或嘗試使用 HTTPS 圖片連結。`); 
-            };
+            testImg.onerror = () => { showError(`無法載入背景圖片：${imgUrl}`); };
             testImg.src = imgUrl;
         }
 
-        // === 套用遊戲參數 ===
         function applyConfig() {
-            // 背景尺寸
             const safeBuffer = 10;
             const widthVW = 100 + (Config.gameplay.maxMoveX * 2) + safeBuffer; 
             const heightVH = 100 + (Config.gameplay.maxMoveY * 2) + safeBuffer;
@@ -260,7 +236,6 @@
             roomLayer.style.left = `-${(widthVW - 100) / 2}vw`;
             roomLayer.style.top = `-${(heightVH - 100) / 2}vh`;
 
-            // 線索位置
             if (Config.clue.show) {
                 clueTextEl.innerText = Config.clue.text;
                 clueCodeEl.innerText = Config.clue.code;
@@ -272,17 +247,13 @@
             }
         }
 
-        // === 啟動遊戲 ===
         startBtn.addEventListener('click', async () => {
             if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
                 try {
                     const permissionState = await DeviceOrientationEvent.requestPermission();
                     if (permissionState === 'granted') startGame();
-                    else alert('需要陀螺儀權限才能遊玩，請在設定中開啟。');
-                } catch (e) { 
-                    console.error(e);
-                    startGame(); 
-                }
+                    else alert('需要陀螺儀權限');
+                } catch (e) { startGame(); }
             } else {
                 startGame();
             }
@@ -293,127 +264,130 @@
             setTimeout(() => { startScreen.style.display = 'none'; }, 500);
             
             isRunning = true;
-            calibrateNextFrame = true; 
-            
-            baseAngleX = null;
-            baseAngleY = null;
+            // 重置累積量，以當前位置為 0
+            lastRawX = null;
+            lastRawY = null;
+            accumulatedX = 0;
+            accumulatedY = 0;
 
             window.addEventListener('deviceorientation', handleOrientation);
             window.addEventListener('mousemove', handleMouse); 
-            
-            window.addEventListener('orientationchange', () => { 
-                setTimeout(() => { calibrateNextFrame = true; }, 500); 
+            // 監聽螢幕旋轉以修正座標系
+            window.addEventListener('orientationchange', () => {
+                setTimeout(() => { lastRawX = null; }, 300); // 旋轉後重置上一幀，避免跳動
             });
 
             requestAnimationFrame(gameLoop);
         }
 
         // ==========================================
-        // [核心修正] 陀螺儀處理邏輯 (無延遲版)
+        // [終極演算法] 連續累加法 (Continuous Accumulation)
         // ==========================================
-        function getShortestRotation(angle, anchor) {
-            let diff = angle - anchor;
-            // 處理 +/- 180 度的循環跳變 (最短路徑)
-            while (diff <= -180) diff += 360;
-            while (diff > 180) diff -= 360;
-            return diff;
-        }
-
         function handleOrientation(e) {
             const screenAngle = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
             
-            let rawAlpha = e.alpha;
-            let rawBeta = e.beta;   
-            let rawGamma = e.gamma; 
+            let rawBeta = e.beta;   // -180 ~ 180
+            let rawGamma = e.gamma; // -90 ~ 90
 
             if (rawBeta === null || rawGamma === null) return;
 
-            // 1. 映射座標系
+            // 1. 根據螢幕方向取得正確的 XY 輸入
             let inputX, inputY;
 
             if (screenAngle === 0) { // 直向
                 inputX = rawGamma;
                 inputY = rawBeta;
-            } 
-            else if (screenAngle === 90) { // 橫向 (向左)
+            } else if (screenAngle === 90) { // 橫向 (左)
                 inputX = rawBeta; 
                 inputY = -rawGamma;
-            } 
-            else if (screenAngle === -90 || screenAngle === 270) { // 橫向 (向右)
+            } else if (screenAngle === -90 || screenAngle === 270) { // 橫向 (右)
                 inputX = -rawBeta;
                 inputY = rawGamma;
-            } 
-            else { 
+            } else { 
                 inputX = -rawGamma;
                 inputY = -rawBeta;
             }
-            
-            // 2. 校正邏輯
-            if (calibrateNextFrame) {
-                baseAngleX = inputX;
-                baseAngleY = inputY;
-                calibrateNextFrame = false;
-                debugText.innerText = "Ready";
+
+            // 2. 初始化上一幀數據
+            if (lastRawX === null || lastRawY === null) {
+                lastRawX = inputX;
+                lastRawY = inputY;
                 return;
             }
 
-            if (baseAngleX === null) return;
+            // 3. 計算變化量 (Delta)
+            let deltaX = inputX - lastRawX;
+            let deltaY = inputY - lastRawY;
 
-            // 3. 計算相對角度 (使用最短路徑演算法防止亂跳)
-            // 這解決了橫式操作跨越 180 度邊界時的閃爍問題
-            let deltaX = getShortestRotation(inputX, baseAngleX);
-            let deltaY = getShortestRotation(inputY, baseAngleY);
+            // 4. [關鍵] 處理邊界循環 (Wrap-around Logic)
+            // 如果變化量大於 180，表示跨越了 +/-180 的邊界
+            // 例如：從 179 變到 -179，數學差值是 -358，但實際只轉了 +2 度
+            if (deltaX > 180) deltaX -= 360;
+            if (deltaX < -180) deltaX += 360;
+            if (deltaY > 180) deltaY -= 360;
+            if (deltaY < -180) deltaY += 360;
 
-            // 4. [移除] 速度限制器與斷崖保護
-            // 為了「即時跟隨」，我們移除所有的人為限制。
-            // 現代瀏覽器的陀螺儀數據已經相當準確，過度過濾只會造成延遲。
+            // 5. 斷崖過濾 (選用)
+            // 如果單幀變化真的太大 (超過 60度)，可能是雜訊，忽略之
+            // 但因為有 Wrap-around 修正，這裡只要過濾極端值即可
+            if (Math.abs(deltaX) > 60) deltaX = 0;
+            if (Math.abs(deltaY) > 60) deltaY = 0;
+
+            // 6. 累加變化量
+            // 這讓我們擁有一個連續的、沒有邊界的數值系統
+            accumulatedX += deltaX;
+            accumulatedY += deltaY;
+
+            // 7. 更新上一幀
+            lastRawX = inputX;
+            lastRawY = inputY;
+
+            // 8. 限制最終範圍 (Clamp)
+            // 為了不讓背景無限滾動，我們對「累積值」做限制
+            // 這裡使用了 limitAngle (25度)
+            const lim = Config.gameplay.limitAngle || 25;
             
-            // 5. 計算最終位置
-            const lim = Config.gameplay.limitAngle || 20;
-            
-            let finalX = deltaX;
-            let finalY = deltaY;
+            // 使用「軟限制 (Soft Clamp)」：超過範圍後數值不再增加，但可以隨時轉回來
+            if (accumulatedX > lim) accumulatedX = lim;
+            if (accumulatedX < -lim) accumulatedX = -lim;
+            if (accumulatedY > lim) accumulatedY = lim;
+            if (accumulatedY < -lim) accumulatedY = -lim;
 
-            // 限制最大角度 (Clamp)，避免背景跑出邊界
-            // 使用 Math.max/min 進行硬限制
-            if (finalX > lim) finalX = lim;
-            if (finalX < -lim) finalX = -lim;
-            if (finalY > lim) finalY = lim;
-            if (finalY < -lim) finalY = -lim;
+            // 9. 計算目標位置
+            targetX = (accumulatedX / lim) * -Config.gameplay.maxMoveX;
+            targetY = (accumulatedY / lim) * -Config.gameplay.maxMoveY;
 
-            // 轉換為 CSS vw/vh 單位
-            targetX = (finalX / lim) * -Config.gameplay.maxMoveX;
-            targetY = (finalY / lim) * -Config.gameplay.maxMoveY;
-
-            debugText.innerText = `X: ${Math.round(finalX)} Y: ${Math.round(finalY)}`;
+            debugText.innerText = `X: ${Math.round(accumulatedX)} Y: ${Math.round(accumulatedY)}`;
         }
 
-        // === 滑鼠處理 ===
+        // 滑鼠模擬 (測試用)
         function handleMouse(e) {
+            // 滑鼠直接控制 Target，不經過累加邏輯
             targetX = ((e.clientX - window.innerWidth/2)/(window.innerWidth/2)) * -Config.gameplay.maxMoveX;
             targetY = ((e.clientY - window.innerHeight/2)/(window.innerHeight/2)) * -Config.gameplay.maxMoveY;
         }
 
-        // === 遊戲渲染迴圈 ===
+        // 渲染迴圈
         function gameLoop() {
             if (!isRunning) return;
             
-            // 使用 config 中的 smoothFactor (建議 0.25 以上以獲得即時感)
-            const sm = Config.gameplay.smoothFactor || 0.25;
+            // 視覺平滑 (Lerp)
+            // 數值越大越跟手 (0.2 是一個不錯的平衡點)
+            const sm = 0.2; 
             
-            // 簡單的插值平滑，不設門檻，讓微小移動也能呈現
-            currentX += (targetX - currentX) * sm;
-            currentY += (targetY - currentY) * sm;
+            currentRenderX += (targetX - currentRenderX) * sm;
+            currentRenderY += (targetY - currentRenderY) * sm;
 
-            roomLayer.style.transform = `translate3d(${currentX}vw, ${currentY}vh, 0)`;
+            // 微小數值優化：如果差異極小，直接吸附，停止計算以省電
+            if (Math.abs(targetX - currentRenderX) < 0.05) currentRenderX = targetX;
+            if (Math.abs(targetY - currentRenderY) < 0.05) currentRenderY = targetY;
+
+            roomLayer.style.transform = `translate3d(${currentRenderX}vw, ${currentRenderY}vh, 0)`;
             
             requestAnimationFrame(gameLoop);
         }
 
-        // 啟動初始化
         initSystem();
     </script>
 </body>
 </html>
-
-
