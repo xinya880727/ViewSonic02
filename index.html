@@ -14,7 +14,6 @@
             overflow: hidden; background-color: #000;
             font-family: 'Courier New', Courier, monospace;
             user-select: none; -webkit-user-select: none;
-            /* 防止瀏覽器預設的下拉刷新或橡皮筋效果 */
             overscroll-behavior: none;
             touch-action: none;
         }
@@ -36,7 +35,6 @@
         #room-layer {
             position: absolute; width: 120vw; height: 120vh; left: -10vw; top: -10vh;
             background-repeat: no-repeat; background-position: center center; background-size: cover;
-            /* 使用 will-change 優化效能 */
             will-change: transform; 
             z-index: 1;
         }
@@ -191,11 +189,11 @@
         let baseAngleX = null; // 校正基準點 X
         let baseAngleY = null; // 校正基準點 Y
         
-        // 濾波與防暴衝變數
+        // 濾波變數
         let lastInputX = 0;
         let lastInputY = 0;
-        let lastValidRawX = null;
-        let lastValidRawY = null;
+        let lastValidRawX = 0; // 改為 0 避免初始化 null 問題
+        let lastValidRawY = 0;
         
         // 渲染變數
         let currentX = 0;
@@ -289,7 +287,7 @@
                     else alert('需要陀螺儀權限才能遊玩，請在設定中開啟。');
                 } catch (e) { 
                     console.error(e);
-                    startGame(); // 發生錯誤仍嘗試啟動 (相容性)
+                    startGame(); 
                 }
             } else {
                 startGame();
@@ -306,12 +304,11 @@
             
             recenterBtn.style.display = 'block';
             isRunning = true;
-            calibrateNextFrame = true; // 啟動時立刻校正
+            calibrateNextFrame = true; 
 
             window.addEventListener('deviceorientation', handleOrientation);
-            window.addEventListener('mousemove', handleMouse); // 電腦版除錯用
+            window.addEventListener('mousemove', handleMouse); 
             
-            // 監聽螢幕旋轉，旋轉後自動重新校正
             window.addEventListener('orientationchange', () => { 
                 setTimeout(() => { calibrateNextFrame = true; }, 500); 
             });
@@ -320,19 +317,19 @@
         }
 
         // ==========================================
-        // [核心] 陀螺儀處理邏輯
+        // [核心修正] 陀螺儀處理邏輯 - 解決卡死問題
         // ==========================================
         function handleOrientation(e) {
             // 1. 取得螢幕方向
             const screenAngle = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
             
             let rawAlpha = e.alpha;
-            let rawBeta = e.beta;   // -180 ~ 180 (前後傾斜)
-            let rawGamma = e.gamma; // -90 ~ 90 (左右傾斜)
+            let rawBeta = e.beta;   
+            let rawGamma = e.gamma; 
 
             if (rawBeta === null || rawGamma === null) return;
 
-            // 2. 映射座標系 (解決平板橫拿問題)
+            // 2. 映射座標系
             let inputX, inputY;
 
             if (screenAngle === 0) { // 直向
@@ -347,69 +344,83 @@
                 inputX = -rawBeta;
                 inputY = rawGamma;
             } 
-            else { // 倒置 (很少見)
+            else { 
                 inputX = -rawGamma;
                 inputY = -rawBeta;
             }
             
-            // 3. [防亂跳] 強制限制輸入範圍
-            // 避開 +/- 90 度的 Gimbal Lock 危險區，只取 +/- 60 度以內的數據
-            const SAFE_LIMIT = 60;
+            // 3. [修正] 擴大安全範圍
+            // 範圍過小會導致看不到邊緣，這裡放寬到 75 度
+            const SAFE_LIMIT = 75;
             if (inputX > SAFE_LIMIT) inputX = SAFE_LIMIT;
             if (inputX < -SAFE_LIMIT) inputX = -SAFE_LIMIT;
             if (inputY > SAFE_LIMIT) inputY = SAFE_LIMIT;
             if (inputY < -SAFE_LIMIT) inputY = -SAFE_LIMIT;
 
-            // 4. [防暴衝] 檢測數據突變
-            // 如果這次數值跟上次差太多 (例如瞬間反轉)，則視為錯誤，忽略之
-            if (lastValidRawX !== null && lastValidRawY !== null) {
-                const diffX = Math.abs(inputX - lastValidRawX);
-                const diffY = Math.abs(inputY - lastValidRawY);
-                const SPIKE_THRESHOLD = 20; // 20度的瞬間變化是不合理的
-
-                if (diffX > SPIKE_THRESHOLD || diffY > SPIKE_THRESHOLD) {
-                    // 偵測到暴衝，直接使用上一次的數值
-                    inputX = lastValidRawX;
-                    inputY = lastValidRawY;
-                }
+            // 4. [修正] 速度限制器 (Speed Limiter) 代替防暴衝
+            // 之前是直接忽略，導致卡死。現在改為限制最大變化量。
+            // 這樣即使感測器瞬間跳變，畫面也只會快速滑過去，而不會卡住。
+            const MAX_SPEED = 10; // 每幀最大允許轉動角度
+            
+            // 計算與上一幀的差異
+            let diffX = inputX - lastValidRawX;
+            let diffY = inputY - lastValidRawY;
+            
+            // 限制 X 軸速度
+            if (Math.abs(diffX) > MAX_SPEED) {
+                // 如果變化太大，只允許移動 MAX_SPEED 的距離
+                inputX = lastValidRawX + Math.sign(diffX) * MAX_SPEED;
             }
             
-            // 更新有效數值
+            // 限制 Y 軸速度
+            if (Math.abs(diffY) > MAX_SPEED) {
+                inputY = lastValidRawY + Math.sign(diffY) * MAX_SPEED;
+            }
+            
+            // 更新最後有效值 (現在這個值永遠會跟上 inputX，不會死鎖)
             lastValidRawX = inputX;
             lastValidRawY = inputY;
 
-            // 5. 校正邏輯 (Recenter)
+            // 5. 校正邏輯
             if (calibrateNextFrame) {
                 baseAngleX = inputX;
                 baseAngleY = inputY;
                 calibrateNextFrame = false;
-                debugText.innerText = "Calibrated! Center Set.";
+                debugText.innerText = "Recentered!";
                 return;
             }
 
             if (baseAngleX === null) return;
 
-            // 6. 計算相對角度 (Delta)
-            // 處理 +/- 180 度的循環跳變 (Wrap-around fix)
+            // 6. 計算相對角度
             let deltaX = inputX - baseAngleX;
             let deltaY = inputY - baseAngleY;
 
+            // 處理環繞
             if (deltaX > 180) deltaX -= 360;
             if (deltaX < -180) deltaX += 360;
             if (deltaY > 180) deltaY -= 360;
             if (deltaY < -180) deltaY += 360;
 
-            // 7. 低通濾波 (Low Pass Filter) - 平滑化
-            const filterFactor = 0.1; // 越小越平滑，越大反應越快
+            // 7. 低通濾波 (使畫面平滑)
+            // 稍微調高一點反應速度 (0.1 -> 0.15)
+            const filterFactor = 0.15; 
             
             lastInputX = lastInputX + (deltaX - lastInputX) * filterFactor;
             lastInputY = lastInputY + (deltaY - lastInputY) * filterFactor;
 
-            // 8. 計算最終 CSS 目標值
+            // 8. 計算最終位置
             const lim = Config.gameplay.limitAngle || 40;
             
-            let finalX = Math.max(-lim, Math.min(lim, lastInputX));
-            let finalY = Math.max(-lim, Math.min(lim, lastInputY));
+            // 這裡不再 clamp，允許稍微超出一點點以增加彈性，但 targetX 還是會被背景大小限制
+            let finalX = lastInputX;
+            let finalY = lastInputY;
+
+            // 限制在 limitAngle 範圍內，以免背景跑出去
+            if (finalX > lim) finalX = lim;
+            if (finalX < -lim) finalX = -lim;
+            if (finalY > lim) finalY = lim;
+            if (finalY < -lim) finalY = -lim;
 
             targetX = (finalX / lim) * -Config.gameplay.maxMoveX;
             targetY = (finalY / lim) * -Config.gameplay.maxMoveY;
@@ -417,7 +428,7 @@
             debugText.innerText = `X: ${Math.round(finalX)} Y: ${Math.round(finalY)}`;
         }
 
-        // === 滑鼠處理 (電腦版除錯) ===
+        // === 滑鼠處理 ===
         function handleMouse(e) {
             targetX = ((e.clientX - window.innerWidth/2)/(window.innerWidth/2)) * -Config.gameplay.maxMoveX;
             targetY = ((e.clientY - window.innerHeight/2)/(window.innerHeight/2)) * -Config.gameplay.maxMoveY;
@@ -427,10 +438,8 @@
         function gameLoop() {
             if (!isRunning) return;
             
-            // 二次平滑 (Visual Smoothing)
             const sm = Config.gameplay.smoothFactor || 0.1;
             
-            // 只有當誤差大於 0.05 時才更新，避免微小抖動
             if (Math.abs(targetX - currentX) > 0.05) {
                 currentX += (targetX - currentX) * sm;
             }
@@ -438,7 +447,6 @@
                 currentY += (targetY - currentY) * sm;
             }
 
-            // 使用 translate3d 硬體加速
             roomLayer.style.transform = `translate3d(${currentX}vw, ${currentY}vh, 0)`;
             
             requestAnimationFrame(gameLoop);
