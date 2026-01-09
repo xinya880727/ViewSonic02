@@ -186,6 +186,10 @@
         let lastInputX = 0;
         let lastInputY = 0;
         
+        // [新增] 防暴衝變數：紀錄上一次「合理」的原始輸入
+        let lastValidRawX = null;
+        let lastValidRawY = null;
+        
         // 渲染變數
         let currentX = 0;
         let currentY = 0;
@@ -193,9 +197,109 @@
         let targetY = 0;
 
         function showError(msg) {
-            errorOverlay.style.display = 'flex';
-            errorMsg.innerText = msg;
-            startScreen.style.display = 'none';
+        // ... (中間 initSystem, loadRoomImage, applyConfig, startGame 等函數保持不變) ...
+
+        // ==========================================
+        // [修正版] 核心邏輯：陀螺儀處理 (防暴衝 + 數值限制)
+        // ==========================================
+        function handleOrientation(e) {
+            // 1. 獲取螢幕角度
+            const screenAngle = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
+            
+            let rawAlpha = e.alpha;
+            let rawBeta = e.beta;   // -180 ~ 180 (前後)
+            let rawGamma = e.gamma; // -90 ~ 90 (左右)
+
+            if (rawBeta === null || rawGamma === null) return;
+
+            // 2. 映射 XY 軸
+            let inputX, inputY;
+
+            if (screenAngle === 0) { // 直向
+                inputX = rawGamma;
+                inputY = rawBeta;
+            } 
+            else if (screenAngle === 90) { // 橫向 (左)
+                inputX = rawBeta; 
+                inputY = -rawGamma;
+            } 
+            else if (screenAngle === -90 || screenAngle === 270) { // 橫向 (右)
+                inputX = -rawBeta;
+                inputY = rawGamma;
+            } 
+            else { // 倒置
+                inputX = -rawGamma;
+                inputY = -rawBeta;
+            }
+            
+            // [新增] 3. 強制範圍限制 (Clamp)
+            // 避開 +/- 90 度的不穩定區域，只取 +/- 60 度以內的數據
+            // 這能有效防止到了邊緣數值亂跳
+            const SAFE_LIMIT = 60;
+            if (inputX > SAFE_LIMIT) inputX = SAFE_LIMIT;
+            if (inputX < -SAFE_LIMIT) inputX = -SAFE_LIMIT;
+            if (inputY > SAFE_LIMIT) inputY = SAFE_LIMIT;
+            if (inputY < -SAFE_LIMIT) inputY = -SAFE_LIMIT;
+
+            // [新增] 4. 防暴衝濾波 (Spike Protection)
+            // 檢查這次數值跟上次數值的差異
+            // 如果瞬間變化超過 20 度 (人類手部動作不可能這麼快)，則視為感測器錯誤，忽略這次數據
+            if (lastValidRawX !== null && lastValidRawY !== null) {
+                const diffX = Math.abs(inputX - lastValidRawX);
+                const diffY = Math.abs(inputY - lastValidRawY);
+                
+                // 允許 Wrap-around (跨越 180/-180 邊界是正常的)，但這裡我們已經 Clamp 到了 60，所以主要防突波
+                const SPIKE_THRESHOLD = 20; 
+
+                if (diffX > SPIKE_THRESHOLD || diffY > SPIKE_THRESHOLD) {
+                    // 偵測到異常跳動，忽略這次更新，沿用上一次的數值
+                    // debugText.innerText = "Spike Detected!";
+                    inputX = lastValidRawX;
+                    inputY = lastValidRawY;
+                }
+            }
+            
+            // 更新有效數值
+            lastValidRawX = inputX;
+            lastValidRawY = inputY;
+
+            // 5. 校正邏輯 (Recenter)
+            if (calibrateNextFrame) {
+                baseAngleX = inputX;
+                baseAngleY = inputY;
+                calibrateNextFrame = false;
+                debugText.innerText = "Calibrated!";
+                return;
+            }
+
+            if (baseAngleX === null) return;
+
+            // 6. 計算相對角度
+            let deltaX = inputX - baseAngleX;
+            let deltaY = inputY - baseAngleY;
+
+            // 處理跨越邊界 (雖有 Clamp，保留此邏輯以防萬一)
+            if (deltaX > 180) deltaX -= 360;
+            if (deltaX < -180) deltaX += 360;
+            if (deltaY > 180) deltaY -= 360;
+            if (deltaY < -180) deltaY += 360;
+
+            // 7. 低通濾波 (Low Pass Filter)
+            const filterFactor = 0.15; // 數值越小越平滑，越大反應越快
+            
+            lastInputX = lastInputX + (deltaX - lastInputX) * filterFactor;
+            lastInputY = lastInputY + (deltaY - lastInputY) * filterFactor;
+
+            // 8. 計算目標位置
+            const lim = Config.gameplay.limitAngle || 40;
+            
+            let finalX = Math.max(-lim, Math.min(lim, lastInputX));
+            let finalY = Math.max(-lim, Math.min(lim, lastInputY));
+
+            targetX = (finalX / lim) * -Config.gameplay.maxMoveX;
+            targetY = (finalY / lim) * -Config.gameplay.maxMoveY;
+
+            debugText.innerText = `X: ${Math.round(finalX)} Y: ${Math.round(finalY)}`;
         }
 
         function initSystem() {
