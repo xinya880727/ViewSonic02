@@ -14,6 +14,8 @@
             overflow: hidden; background-color: #000;
             font-family: 'Courier New', Courier, monospace;
             user-select: none; -webkit-user-select: none;
+            /* 防止 iOS 橡皮筋捲動效果 */
+            overscroll-behavior: none;
         }
         #game-container { position: relative; width: 100vw; height: 100vh; overflow: hidden; }
 
@@ -33,7 +35,9 @@
         #room-layer {
             position: absolute; width: 120vw; height: 120vh; left: -10vw; top: -10vh;
             background-repeat: no-repeat; background-position: center center; background-size: cover;
-            will-change: transform; transition: transform 0.1s linear; z-index: 1;
+            /* 移除 transition，改由 JS 逐幀控制以獲得更滑順的效果 */
+            will-change: transform; 
+            z-index: 1;
         }
         .clue-paper {
             position: absolute; width: 100px; height: 120px; background-color: #f8f1e5;
@@ -48,28 +52,19 @@
             border: 1px solid rgba(255, 255, 255, 0.2); box-shadow: 0 1px 3px rgba(0,0,0,0.2);
         }
 
-        /* === 遮罩容器 === */
+        /* 遮罩容器 */
         #mask-container {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
             pointer-events: none; z-index: 10;
             display: flex; justify-content: center; align-items: center;
         }
-
-        /* 模式 A: SVG 遮罩 */
-        #keyhole-svg { 
-            width: 100%; height: 100%; display: none; 
-        }
+        #keyhole-svg { width: 100%; height: 100%; display: none; }
         #mask-shape-group { transform-origin: 50px 50px; transition: transform 0.3s ease; }
-
-        /* 模式 B: 圖片遮罩 */
         #keyhole-image-layer {
-            width: 100%; height: 100%;
-            object-fit: cover; 
-            display: none; 
-            transition: transform 0.3s ease;
+            width: 100%; height: 100%; object-fit: cover; display: none; transition: transform 0.3s ease;
         }
 
-        /* 前景暗角 */
+        /* 暗角 */
         #vignette {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 11;
             background: radial-gradient(circle at center, transparent 10%, rgba(0,0,0,0.6) 50%, #000 80%);
@@ -83,13 +78,21 @@
             color: white; text-align: center; padding: 20px; transition: opacity 0.5s;
         }
         h1 { color: #d00; text-shadow: 0 0 10px #500; font-size: 2rem; margin-bottom: 10px; }
-        #description { color: #ccc; margin-bottom: 20px; max-width: 600px; }
         button {
             margin-top: 20px; padding: 15px 40px; font-size: 1.2rem;
             background: transparent; color: #d00; border: 2px solid #d00; border-radius: 5px;
             cursor: pointer; transition: all 0.3s; font-weight: bold;
         }
         button:hover { background: #d00; color: #fff; box-shadow: 0 0 20px #d00; }
+        
+        /* 重新校正按鈕 (遊戲中顯示) */
+        #recenter-btn {
+            position: absolute; top: 20px; right: 20px; z-index: 50;
+            background: rgba(0,0,0,0.5); color: #fff; border: 1px solid #fff;
+            padding: 5px 10px; font-size: 12px; border-radius: 20px; cursor: pointer;
+            display: none; /* 遊戲開始後才顯示 */
+        }
+        
         .debug-info { position: absolute; bottom: 10px; left: 10px; color: lime; font-size: 12px; z-index: 50; pointer-events: none; opacity: 0.6; }
     </style>
 </head>
@@ -103,7 +106,7 @@
             <button onclick="location.reload()" style="margin-top:20px;">重試</button>
         </div>
 
-        <!-- 1. 房間層 -->
+        <!-- 遊戲內容 -->
         <div id="room-layer">
             <div id="clue-element" class="clue-paper">
                 <div class="tape"></div>
@@ -115,9 +118,7 @@
 
         <div id="vignette"></div>
 
-        <!-- 2. 遮罩層 -->
         <div id="mask-container">
-            <!-- 模式 A: SVG -->
             <svg id="keyhole-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
                 <defs>
                     <mask id="hole-mask">
@@ -127,11 +128,12 @@
                 </defs>
                 <rect x="0" y="0" width="100" height="100" fill="black" mask="url(#hole-mask)" />
             </svg>
-            <!-- 模式 B: 圖片 -->
             <img id="keyhole-image-layer" src="" alt="Mask" />
         </div>
 
-        <!-- 3. UI 層 -->
+        <!-- 重新校正按鈕 -->
+        <div id="recenter-btn">⟳ 重設視角中心</div>
+
         <div id="start-screen">
             <h1 id="ui-title">窺視深淵</h1>
             <p id="ui-desc">...</p>
@@ -143,21 +145,24 @@
     </div>
 
     <script>
+        // DOM Elements
         const roomLayer = document.getElementById('room-layer');
         const startScreen = document.getElementById('start-screen');
         const startBtn = document.getElementById('start-btn');
+        const recenterBtn = document.getElementById('recenter-btn');
         const debugText = document.getElementById('debug');
-        const clueEl = document.getElementById('clue-element');
-        const clueTextEl = document.getElementById('clue-text');
-        const clueCodeEl = document.getElementById('clue-code');
         const errorOverlay = document.getElementById('error-overlay');
         const errorMsg = document.getElementById('error-msg');
         
+        // UI Elements
+        const clueEl = document.getElementById('clue-element');
+        const clueTextEl = document.getElementById('clue-text');
+        const clueCodeEl = document.getElementById('clue-code');
+        const uiTitle = document.getElementById('ui-title');
+        const uiDesc = document.getElementById('ui-desc');
         const svgEl = document.getElementById('keyhole-svg');
         const maskGroup = document.getElementById('mask-shape-group');
         const imgEl = document.getElementById('keyhole-image-layer');
-        const uiTitle = document.getElementById('ui-title');
-        const uiDesc = document.getElementById('ui-desc');
 
         // Fallback Config
         const FallbackConfig = {
@@ -171,6 +176,21 @@
         };
 
         let Config = null;
+        
+        // 陀螺儀變數
+        let isRunning = false;
+        let baseAngleX = null; // 校正基準點 X
+        let baseAngleY = null; // 校正基準點 Y
+        
+        // 濾波變數 (Smooth Filter)
+        let lastInputX = 0;
+        let lastInputY = 0;
+        
+        // 渲染變數
+        let currentX = 0;
+        let currentY = 0;
+        let targetX = 0;
+        let targetY = 0;
 
         function showError(msg) {
             errorOverlay.style.display = 'flex';
@@ -179,19 +199,19 @@
         }
 
         function initSystem() {
-            if (typeof GameConfig !== 'undefined') {
-                Config = GameConfig;
-            } else {
-                Config = FallbackConfig;
+            Config = (typeof GameConfig !== 'undefined') ? GameConfig : FallbackConfig;
+            
+            if (typeof GameConfig === 'undefined') {
                 debugText.innerText = "Mode: Fallback";
                 debugText.style.color = "yellow";
             }
 
-            // UI & Config Setup
+            // Apply UI
             if (Config.title) uiTitle.innerText = Config.title;
             if (Config.description) uiDesc.innerText = Config.description;
             if (Config.startButtonText) startBtn.innerText = Config.startButtonText;
 
+            // Apply Mask
             const maskConfig = Config.mask || FallbackConfig.mask;
             const mode = maskConfig.mode || 'svg';
             const scale = maskConfig.scale || 1.0;
@@ -202,8 +222,6 @@
                 if (maskConfig.imageSrc) {
                     imgEl.src = maskConfig.imageSrc;
                     imgEl.style.transform = `scale(${scale})`;
-                } else {
-                    showError("Config Error: mask.mode 是 'image'，但沒有提供 mask.imageSrc");
                 }
             } else {
                 imgEl.style.display = 'none';
@@ -212,23 +230,20 @@
                 maskGroup.style.transform = `scale(${scale})`;
             }
 
-            loadRoomImage(Config.backgroundImage);
-        }
-
-        function loadRoomImage(url) {
+            // Load Image
+            const imgUrl = Config.backgroundImage || FallbackConfig.backgroundImage;
             const testImg = new Image();
             testImg.onload = () => {
-                roomLayer.style.backgroundImage = `url('${url}')`;
+                roomLayer.style.backgroundImage = `url('${imgUrl}')`;
                 if(Config === GameConfig) debugText.innerText = "System Ready.";
                 applyConfig();
             };
-            testImg.onerror = () => {
-                showError(`無法載入背景圖片：${url}`);
-            };
-            testImg.src = url;
+            testImg.onerror = () => { showError(`無法載入背景圖片：${imgUrl}`); };
+            testImg.src = imgUrl;
         }
 
         function applyConfig() {
+            // Apply size
             const safeBuffer = 10;
             const widthVW = 100 + (Config.gameplay.maxMoveX * 2) + safeBuffer; 
             const heightVH = 100 + (Config.gameplay.maxMoveY * 2) + safeBuffer;
@@ -237,6 +252,7 @@
             roomLayer.style.left = `-${(widthVW - 100) / 2}vw`;
             roomLayer.style.top = `-${(heightVH - 100) / 2}vh`;
 
+            // Apply clue
             if (Config.clue.show) {
                 clueTextEl.innerText = Config.clue.text;
                 clueCodeEl.innerText = Config.clue.code;
@@ -248,95 +264,133 @@
             }
         }
 
-        // Gameplay Loop
-        let currentX=0, currentY=0, targetX=0, targetY=0, isRunning=false;
-
+        // ==========================================
+        // 核心邏輯：啟動與校正
+        // ==========================================
         startBtn.addEventListener('click', async () => {
             if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
                 try {
                     const permissionState = await DeviceOrientationEvent.requestPermission();
                     if (permissionState === 'granted') startGame();
-                    else alert('需要陀螺儀權限');
+                    else alert('需要陀螺儀權限才能遊玩');
                 } catch (e) { startGame(); }
             } else {
                 startGame();
             }
         });
+        
+        recenterBtn.addEventListener('click', () => {
+            calibrateNextFrame = true;
+        });
+
+        let calibrateNextFrame = false;
 
         function startGame() {
             startScreen.style.opacity = '0';
             setTimeout(() => { startScreen.style.display = 'none'; }, 500);
+            
+            recenterBtn.style.display = 'block';
             isRunning = true;
+            
+            // 標記需要在收到第一個數據時進行校正
+            calibrateNextFrame = true;
+
             window.addEventListener('deviceorientation', handleOrientation);
-            // 監聽螢幕旋轉事件，確保即時更新
-            window.addEventListener('orientationchange', () => { 
-                // 某些瀏覽器需要一點時間更新 orientation 物件
-                setTimeout(() => {}, 200); 
-            });
             window.addEventListener('mousemove', handleMouse);
+            
+            // 監聽螢幕旋轉，旋轉後重設校正
+            window.addEventListener('orientationchange', () => { 
+                setTimeout(() => { calibrateNextFrame = true; }, 300); 
+            });
+
             requestAnimationFrame(gameLoop);
         }
 
-        // === [修正] 支援平板/手機橫向與直向的自動判斷 ===
+        // ==========================================
+        // 核心邏輯：陀螺儀處理 (防抖動 + 相對位移)
+        // ==========================================
         function handleOrientation(e) {
-            // 取得目前螢幕角度 (兼容性寫法)
-            // 0: 直向, 90: 橫向(左轉), -90/270: 橫向(右轉), 180: 倒置
-            const angle = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
+            // 1. 獲取螢幕角度 (解決平板橫向問題)
+            const screenAngle = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
+            
+            let rawAlpha = e.alpha;
+            let rawBeta = e.beta;   // -180 ~ 180 (前後)
+            let rawGamma = e.gamma; // -90 ~ 90 (左右)
 
-            let x = e.gamma; // 左右傾斜 (預設直向)
-            let y = e.beta;  // 前後傾斜 (預設直向)
+            if (rawBeta === null || rawGamma === null) return;
 
-            if (x === null || y === null) return;
-
+            // 2. 根據螢幕方向，將感測器數據映射到統一的 XY 軸
+            // inputX: 左右傾斜, inputY: 上下傾斜
             let inputX, inputY;
 
-            // 根據螢幕角度重新映射 X/Y 軸
-            if (angle === 90) {
-                // 平板橫拿 (Home鍵在右 / 鏡頭在左)
-                // 此時前後傾斜 (Beta) 變成螢幕的左右移動
-                inputX = y;  
-                inputY = -x; 
-            } else if (angle === -90 || angle === 270) {
-                // 平板橫拿 (Home鍵在左 / 鏡頭在右)
-                inputX = -y;
-                inputY = x;
-            } else if (angle === 180) {
-                inputX = -x;
-                inputY = -y;
-            } else {
-                // 直向 (手機預設)
-                inputX = x;
-                inputY = y;
+            if (screenAngle === 0) { // 直向 (Portrait)
+                inputX = rawGamma;
+                inputY = rawBeta;
+            } 
+            else if (screenAngle === 90) { // 橫向 (Landscape Left)
+                inputX = rawBeta; 
+                inputY = -rawGamma;
+            } 
+            else if (screenAngle === -90 || screenAngle === 270) { // 橫向 (Landscape Right)
+                inputX = -rawBeta;
+                inputY = rawGamma;
+            } 
+            else { // 倒置 (Upside Down)
+                inputX = -rawGamma;
+                inputY = -rawBeta;
+            }
+            
+            // 3. 處理數據跳動 (Gimbal Lock 防護)
+            // 當裝置垂直時 (Beta ~ 90)，Gamma 會變得極不穩定。
+            // 這裡做一個簡單的 Clamp 防止極端值炸裂
+            if (inputX > 90) inputX = 90;
+            if (inputX < -90) inputX = -90;
+
+            // 4. 校正邏輯 (Recenter)
+            // 將「現在的角度」設為 0 點
+            if (calibrateNextFrame) {
+                baseAngleX = inputX;
+                baseAngleY = inputY;
+                calibrateNextFrame = false;
+                debugText.innerText = "Calibrated!";
+                return;
             }
 
-            // 校正中心點
-            // 直向時，手持通常傾斜約 45 度 (Beta)，所以要扣掉 45 才是中心
-            // 橫向時，手持通常 Gamma 也會有傾角，但為了避免過度修正，
-            // 我們只對「直向」做強制校正，橫向則依賴相對移動或較小的修正。
-            let calibratedY = inputY;
-            if (angle === 0 || angle === 180) {
-                calibratedY = inputY - 45;
-            } 
-            // 如果您覺得平板橫拿時視角太偏上或偏下，可以在這裡對橫向做微調
-            // else { calibratedY = inputY - 30; } 
+            if (baseAngleX === null) return;
 
-            const lim = Config.gameplay.limitAngle;
+            // 5. 計算相對角度 (Delta)
+            // 處理 +/- 180 度的循環跳變 (Wrap-around fix)
+            let deltaX = inputX - baseAngleX;
+            let deltaY = inputY - baseAngleY;
 
-            // 限制數值範圍
-            if (inputX > lim) inputX = lim;
-            if (inputX < -lim) inputX = -lim;
-            if (calibratedY > lim) calibratedY = lim;
-            if (calibratedY < -lim) calibratedY = -lim;
+            // 如果差值超過 180，代表跨越了邊界，需要修正
+            if (deltaX > 180) deltaX -= 360;
+            if (deltaX < -180) deltaX += 360;
+            if (deltaY > 180) deltaY -= 360;
+            if (deltaY < -180) deltaY += 360;
 
-            // 正規化並計算目標位置 (反向移動產生視差)
-            const normX = inputX / lim;
-            const normY = calibratedY / lim;
-
-            targetX = normX * -Config.gameplay.maxMoveX; 
-            targetY = normY * -Config.gameplay.maxMoveY;
+            // 6. 低通濾波 (Low Pass Filter) - 消除手抖
+            // 係數 0.1 表示：新數值佔 10%，舊數值佔 90% (非常平滑)
+            // 係數 0.5 表示：反應較快
+            const filterFactor = 0.2; 
             
-            // Debug 資訊 (顯示角度幫助除錯)
-            debugText.innerText = `G: ${Math.round(x)} B: ${Math.round(y)} | Ang: ${angle}`;
+            // 注意：這裡是對「輸入訊號」做平滑，而不是對「結果」做平滑
+            // 這能有效減少感測器本身的雜訊
+            lastInputX = lastInputX + (deltaX - lastInputX) * filterFactor;
+            lastInputY = lastInputY + (deltaY - lastInputY) * filterFactor;
+
+            // 7. 計算目標位置 (Mapping to CSS)
+            // 反向移動 (Parallax)
+            const lim = Config.gameplay.limitAngle || 40;
+            
+            // Clamp 最終角度
+            let finalX = Math.max(-lim, Math.min(lim, lastInputX));
+            let finalY = Math.max(-lim, Math.min(lim, lastInputY));
+
+            targetX = (finalX / lim) * -Config.gameplay.maxMoveX;
+            targetY = (finalY / lim) * -Config.gameplay.maxMoveY;
+
+            debugText.innerText = `X: ${Math.round(finalX)} Y: ${Math.round(finalY)} (Ang:${screenAngle})`;
         }
 
         function handleMouse(e) {
@@ -346,10 +400,21 @@
 
         function gameLoop() {
             if (!isRunning) return;
-            const sm = Config.gameplay.smoothFactor;
-            currentX += (targetX - currentX) * sm;
-            currentY += (targetY - currentY) * sm;
+            
+            // 二次平滑 (Visual Smoothing)
+            // 這是為了讓畫面更新率 (60fps) 跟上數據變化
+            const sm = Config.gameplay.smoothFactor || 0.1;
+            
+            // 如果誤差很小，就直接停止計算，節省效能並防止微抖
+            if (Math.abs(targetX - currentX) < 0.05) currentX = targetX;
+            else currentX += (targetX - currentX) * sm;
+
+            if (Math.abs(targetY - currentY) < 0.05) currentY = targetY;
+            else currentY += (targetY - currentY) * sm;
+
+            // 使用 translate3d 開啟硬體加速
             roomLayer.style.transform = `translate3d(${currentX}vw, ${currentY}vh, 0)`;
+            
             requestAnimationFrame(gameLoop);
         }
 
