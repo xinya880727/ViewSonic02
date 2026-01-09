@@ -19,6 +19,30 @@
         }
         #game-container { position: relative; width: 100vw; height: 100vh; overflow: hidden; }
 
+        /* === 強制橫式提示層 === */
+        #portrait-blocker {
+            display: none; /* 預設隱藏 */
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: #111; z-index: 99999;
+            flex-direction: column; justify-content: center; align-items: center;
+            color: #fff; text-align: center;
+        }
+        #portrait-blocker .icon { font-size: 60px; margin-bottom: 20px; animation: rotate-icon 2s infinite; }
+        #portrait-blocker p { font-size: 20px; color: #aaa; }
+
+        @keyframes rotate-icon {
+            0% { transform: rotate(0deg); }
+            20% { transform: rotate(-90deg); }
+            80% { transform: rotate(-90deg); }
+            100% { transform: rotate(0deg); }
+        }
+
+        /* 透過 CSS Media Query 偵測直式，強制顯示遮罩 */
+        @media screen and (orientation: portrait) {
+            #portrait-blocker { display: flex !important; }
+            #game-container { visibility: hidden; } /* 隱藏遊戲內容但保留結構 */
+        }
+
         /* 錯誤訊息 */
         #error-overlay {
             display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%;
@@ -35,7 +59,6 @@
         #room-layer {
             position: absolute; width: 120vw; height: 120vh; left: -10vw; top: -10vh;
             background-repeat: no-repeat; background-position: center center; background-size: cover;
-            /* 關鍵：關閉 CSS transition，完全交由 JS 的動態阻尼控制 */
             will-change: transform; 
             z-index: 1;
         }
@@ -89,6 +112,12 @@
 </head>
 <body>
 
+    <!-- 直式阻擋層 -->
+    <div id="portrait-blocker">
+        <div class="icon">📱 ↪️</div>
+        <p>為了最佳體驗<br>請將裝置轉為橫向 (Landscape)</p>
+    </div>
+
     <div id="game-container">
         <div id="error-overlay">
             <h2 style="color:#fff">⚠️ 發生錯誤</h2>
@@ -124,7 +153,7 @@
             <h1 id="ui-title">窺視深淵</h1>
             <p id="ui-desc">...</p>
             <button id="start-btn">開始</button>
-            <p style="font-size: 12px; color: #666; margin-top: 20px;">(建議使用 HTTPS 以確保平板支援)</p>
+            <p style="font-size: 12px; color: #666; margin-top: 20px;">(僅支援橫向遊玩)</p>
         </div>
 
         <div class="debug-info" id="debug">System Init...</div>
@@ -187,9 +216,11 @@
 
             if (!Config.gameplay) Config.gameplay = FallbackConfig.gameplay;
             
-            // 強制優化參數以解決卡頓與晃動
-            Config.gameplay.limitAngle = 35; // 範圍更大，直式更好操作
-            Config.gameplay.smoothFactor = 0.3; // 基礎反應速度
+            // 強制設定高效能參數
+            Config.gameplay.limitAngle = 35; 
+            Config.gameplay.maxMoveX = 50;
+            Config.gameplay.maxMoveY = 50;
+            Config.gameplay.smoothFactor = 0.3;
 
             if (Config.title) uiTitle.innerText = Config.title;
             if (Config.description) uiDesc.innerText = Config.description;
@@ -261,6 +292,8 @@
             setTimeout(() => { startScreen.style.display = 'none'; }, 500);
             
             isRunning = true;
+            
+            // 重置所有數值
             lastRawX = null;
             lastRawY = null;
             accumulatedX = 0;
@@ -268,66 +301,71 @@
 
             window.addEventListener('deviceorientation', handleOrientation);
             window.addEventListener('mousemove', handleMouse); 
-            window.addEventListener('orientationchange', () => {
-                setTimeout(() => { lastRawX = null; }, 300);
-            });
-
             requestAnimationFrame(gameLoop);
         }
 
+        // ==========================================
+        // [橫式專用] 陀螺儀處理邏輯
+        // ==========================================
         function handleOrientation(e) {
-            const screenAngle = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
+            // 由於我們用 CSS 強制橫式，這裡假設玩家已經將裝置轉橫
+            // 但我們仍需偵測旋轉方向 (左轉90度 或 右轉-90度) 來決定軸向正負
             
-            let rawBeta = e.beta;   
-            let rawGamma = e.gamma; 
+            const screenAngle = (screen.orientation && screen.orientation.angle) || window.orientation || 90;
+            
+            let rawBeta = e.beta;   // 前後傾斜 (-180 ~ 180)
+            let rawGamma = e.gamma; // 左右傾斜 (-90 ~ 90)
 
             if (rawBeta === null || rawGamma === null) return;
 
             let inputX, inputY;
 
-            if (screenAngle === 0) { // 直向
-                // 直式優化：將 gamma 限制在 -85~85，避免接近 90 度時數值翻轉導致卡頓
-                inputX = Math.max(-85, Math.min(85, rawGamma));
-                inputY = rawBeta;
-            } else if (screenAngle === 90) { // 橫向
+            // 橫式判斷邏輯 (Landscape Logic Only)
+            if (screenAngle === 90) { 
+                // Home 鍵在右 / 鏡頭在左 (最常見)
+                // Beta 控制 X 軸 (左右)，Gamma 控制 Y 軸 (上下)
                 inputX = rawBeta; 
-                inputY = -rawGamma;
-            } else if (screenAngle === -90 || screenAngle === 270) { // 橫向
+                inputY = -rawGamma; 
+            } 
+            else if (screenAngle === -90 || screenAngle === 270) { 
+                // Home 鍵在左 / 鏡頭在右
                 inputX = -rawBeta;
                 inputY = rawGamma;
-            } else { 
-                inputX = -rawGamma;
-                inputY = -rawBeta;
+            } 
+            else { 
+                // 如果玩家還在直式 (雖然被 CSS 擋住了)，我們暫停更新
+                // 直到他轉回來
+                return; 
             }
 
+            // 初始化上一幀
             if (lastRawX === null || lastRawY === null) {
                 lastRawX = inputX;
                 lastRawY = inputY;
                 return;
             }
 
+            // 計算變化量 (Delta)
             let deltaX = inputX - lastRawX;
             let deltaY = inputY - lastRawY;
 
-            // 處理環繞
+            // [關鍵] 處理橫式翻轉的邊界問題 (+/- 180度)
+            // 當裝置翻面時，Beta 會在 180 和 -180 之間跳變
             if (deltaX > 180) deltaX -= 360;
             if (deltaX < -180) deltaX += 360;
             if (deltaY > 180) deltaY -= 360;
             if (deltaY < -180) deltaY += 360;
 
-            // [解決晃動] 微動濾波器 (Micro-movement Filter)
-            // 如果變化量極小 (小於 0.08 度)，視為雜訊，直接忽略
-            // 這能有效消除手持時的「不明晃動」
-            if (Math.abs(deltaX) < 0.08) deltaX = 0;
-            if (Math.abs(deltaY) < 0.08) deltaY = 0;
-
+            // 累加變化量 (累積角度)
+            // 這種方式可以無限旋轉，不會被絕對座標限制住，解決了邊緣亂跳問題
             accumulatedX += deltaX;
             accumulatedY += deltaY;
 
+            // 更新上一幀
             lastRawX = inputX;
             lastRawY = inputY;
 
-            // 限制範圍 (Soft Clamp)
+            // 限制最大可視範圍 (Soft Clamp)
             const lim = Config.gameplay.limitAngle || 35;
             
             if (accumulatedX > lim) accumulatedX = lim;
@@ -335,6 +373,7 @@
             if (accumulatedY > lim) accumulatedY = lim;
             if (accumulatedY < -lim) accumulatedY = -lim;
 
+            // 計算目標 CSS 數值
             targetX = (accumulatedX / lim) * -Config.gameplay.maxMoveX;
             targetY = (accumulatedY / lim) * -Config.gameplay.maxMoveY;
 
@@ -349,15 +388,10 @@
         function gameLoop() {
             if (!isRunning) return;
             
-            // [解決卡頓] 動態阻尼 (Dynamic Damping)
-            // 計算目前位置與目標位置的距離
+            // 動態平滑係數：根據距離動態調整，兼顧穩定與反應
             let dist = Math.sqrt(Math.pow(targetX - currentRenderX, 2) + Math.pow(targetY - currentRenderY, 2));
+            let sm = (dist > 1.0) ? 0.3 : 0.15; // 大動快追，小動慢修
             
-            // 如果距離大 (快速移動)，使用極高的平滑係數 (0.3~0.4)，幾乎無延遲
-            // 如果距離小 (慢速微調)，降低係數 (0.1)，讓畫面穩定不抖
-            let sm = (dist > 1.0) ? 0.3 : 0.1;
-            
-            // 極小距離吸附 (避免最後 1px 的顫抖)
             if (dist < 0.05) {
                 currentRenderX = targetX;
                 currentRenderY = targetY;
