@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>鑰匙孔偷窺解謎</title>
     
-    <!-- 引入設定檔 -->
+    <!-- 引入設定檔，若失敗則標記錯誤 -->
     <script src="config.js" onerror="window.configLoadError = true;"></script>
     
     <style>
@@ -14,8 +14,9 @@
             overflow: hidden; background-color: #000;
             font-family: 'Courier New', Courier, monospace;
             user-select: none; -webkit-user-select: none;
-            /* 防止 iOS 橡皮筋捲動效果 */
+            /* 防止瀏覽器預設的下拉刷新或橡皮筋效果 */
             overscroll-behavior: none;
+            touch-action: none;
         }
         #game-container { position: relative; width: 100vw; height: 100vh; overflow: hidden; }
 
@@ -35,7 +36,7 @@
         #room-layer {
             position: absolute; width: 120vw; height: 120vh; left: -10vw; top: -10vh;
             background-repeat: no-repeat; background-position: center center; background-size: cover;
-            /* 移除 transition，改由 JS 逐幀控制以獲得更滑順的效果 */
+            /* 使用 will-change 優化效能 */
             will-change: transform; 
             z-index: 1;
         }
@@ -89,8 +90,8 @@
         #recenter-btn {
             position: absolute; top: 20px; right: 20px; z-index: 50;
             background: rgba(0,0,0,0.5); color: #fff; border: 1px solid #fff;
-            padding: 5px 10px; font-size: 12px; border-radius: 20px; cursor: pointer;
-            display: none; /* 遊戲開始後才顯示 */
+            padding: 8px 15px; font-size: 14px; border-radius: 20px; cursor: pointer;
+            display: none; 
         }
         
         .debug-info { position: absolute; bottom: 10px; left: 10px; color: lime; font-size: 12px; z-index: 50; pointer-events: none; opacity: 0.6; }
@@ -113,6 +114,7 @@
                 <span id="clue-text"></span>
                 <strong id="clue-code"></strong>
             </div>
+            <!-- 模糊前景 -->
             <div style="position:absolute; bottom:20%; right:10%; width:200px; height:300px; background:rgba(0,0,0,0.6); filter:blur(20px);"></div>
         </div>
 
@@ -145,7 +147,7 @@
     </div>
 
     <script>
-        // DOM Elements
+        // === DOM Elements ===
         const roomLayer = document.getElementById('room-layer');
         const startScreen = document.getElementById('start-screen');
         const startBtn = document.getElementById('start-btn');
@@ -164,29 +166,34 @@
         const maskGroup = document.getElementById('mask-shape-group');
         const imgEl = document.getElementById('keyhole-image-layer');
 
-        // Fallback Config
+        // === 內建備用設定 (Fallback Config) ===
         const FallbackConfig = {
             title: "窺視深淵",
             description: "房間的某個角落藏著一組密碼...",
             startButtonText: "開始窺視",
             backgroundImage: 'https://images.unsplash.com/photo-1519074069444-1ba4fff66d16?q=80&w=2574&auto=format&fit=crop',
-            mask: { mode: 'svg', scale: 1.0, shapes: `<circle cx="50" cy="40" r="15" fill="black" /><path d="M50 40 L65 90 L35 90 Z" fill="black" />` },
+            mask: { 
+                mode: 'svg', 
+                scale: 1.0, 
+                shapes: `<circle cx="50" cy="40" r="15" fill="black" /><path d="M50 40 L65 90 L35 90 Z" fill="black" />` 
+            },
             clue: { show: true, text: "DEMO", code: "9527", top: "15%", left: "15%", rotation: -5 },
             gameplay: { maxMoveX: 30, maxMoveY: 30, smoothFactor: 0.1, limitAngle: 40 }
         };
 
         let Config = null;
         
-        // 陀螺儀變數
+        // === 遊戲變數 ===
         let isRunning = false;
+        let calibrateNextFrame = false;
+        
+        // 陀螺儀核心變數
         let baseAngleX = null; // 校正基準點 X
         let baseAngleY = null; // 校正基準點 Y
         
-        // 濾波變數 (Smooth Filter)
+        // 濾波與防暴衝變數
         let lastInputX = 0;
         let lastInputY = 0;
-        
-        // [新增] 防暴衝變數：紀錄上一次「合理」的原始輸入
         let lastValidRawX = null;
         let lastValidRawY = null;
         
@@ -196,126 +203,28 @@
         let targetX = 0;
         let targetY = 0;
 
+        // === 錯誤處理 ===
         function showError(msg) {
-        // ... (中間 initSystem, loadRoomImage, applyConfig, startGame 等函數保持不變) ...
-
-        // ==========================================
-        // [修正版] 核心邏輯：陀螺儀處理 (防暴衝 + 數值限制)
-        // ==========================================
-        function handleOrientation(e) {
-            // 1. 獲取螢幕角度
-            const screenAngle = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
-            
-            let rawAlpha = e.alpha;
-            let rawBeta = e.beta;   // -180 ~ 180 (前後)
-            let rawGamma = e.gamma; // -90 ~ 90 (左右)
-
-            if (rawBeta === null || rawGamma === null) return;
-
-            // 2. 映射 XY 軸
-            let inputX, inputY;
-
-            if (screenAngle === 0) { // 直向
-                inputX = rawGamma;
-                inputY = rawBeta;
-            } 
-            else if (screenAngle === 90) { // 橫向 (左)
-                inputX = rawBeta; 
-                inputY = -rawGamma;
-            } 
-            else if (screenAngle === -90 || screenAngle === 270) { // 橫向 (右)
-                inputX = -rawBeta;
-                inputY = rawGamma;
-            } 
-            else { // 倒置
-                inputX = -rawGamma;
-                inputY = -rawBeta;
-            }
-            
-            // [新增] 3. 強制範圍限制 (Clamp)
-            // 避開 +/- 90 度的不穩定區域，只取 +/- 60 度以內的數據
-            // 這能有效防止到了邊緣數值亂跳
-            const SAFE_LIMIT = 60;
-            if (inputX > SAFE_LIMIT) inputX = SAFE_LIMIT;
-            if (inputX < -SAFE_LIMIT) inputX = -SAFE_LIMIT;
-            if (inputY > SAFE_LIMIT) inputY = SAFE_LIMIT;
-            if (inputY < -SAFE_LIMIT) inputY = -SAFE_LIMIT;
-
-            // [新增] 4. 防暴衝濾波 (Spike Protection)
-            // 檢查這次數值跟上次數值的差異
-            // 如果瞬間變化超過 20 度 (人類手部動作不可能這麼快)，則視為感測器錯誤，忽略這次數據
-            if (lastValidRawX !== null && lastValidRawY !== null) {
-                const diffX = Math.abs(inputX - lastValidRawX);
-                const diffY = Math.abs(inputY - lastValidRawY);
-                
-                // 允許 Wrap-around (跨越 180/-180 邊界是正常的)，但這裡我們已經 Clamp 到了 60，所以主要防突波
-                const SPIKE_THRESHOLD = 20; 
-
-                if (diffX > SPIKE_THRESHOLD || diffY > SPIKE_THRESHOLD) {
-                    // 偵測到異常跳動，忽略這次更新，沿用上一次的數值
-                    // debugText.innerText = "Spike Detected!";
-                    inputX = lastValidRawX;
-                    inputY = lastValidRawY;
-                }
-            }
-            
-            // 更新有效數值
-            lastValidRawX = inputX;
-            lastValidRawY = inputY;
-
-            // 5. 校正邏輯 (Recenter)
-            if (calibrateNextFrame) {
-                baseAngleX = inputX;
-                baseAngleY = inputY;
-                calibrateNextFrame = false;
-                debugText.innerText = "Calibrated!";
-                return;
-            }
-
-            if (baseAngleX === null) return;
-
-            // 6. 計算相對角度
-            let deltaX = inputX - baseAngleX;
-            let deltaY = inputY - baseAngleY;
-
-            // 處理跨越邊界 (雖有 Clamp，保留此邏輯以防萬一)
-            if (deltaX > 180) deltaX -= 360;
-            if (deltaX < -180) deltaX += 360;
-            if (deltaY > 180) deltaY -= 360;
-            if (deltaY < -180) deltaY += 360;
-
-            // 7. 低通濾波 (Low Pass Filter)
-            const filterFactor = 0.15; // 數值越小越平滑，越大反應越快
-            
-            lastInputX = lastInputX + (deltaX - lastInputX) * filterFactor;
-            lastInputY = lastInputY + (deltaY - lastInputY) * filterFactor;
-
-            // 8. 計算目標位置
-            const lim = Config.gameplay.limitAngle || 40;
-            
-            let finalX = Math.max(-lim, Math.min(lim, lastInputX));
-            let finalY = Math.max(-lim, Math.min(lim, lastInputY));
-
-            targetX = (finalX / lim) * -Config.gameplay.maxMoveX;
-            targetY = (finalY / lim) * -Config.gameplay.maxMoveY;
-
-            debugText.innerText = `X: ${Math.round(finalX)} Y: ${Math.round(finalY)}`;
+            errorOverlay.style.display = 'flex';
+            errorMsg.innerText = msg;
+            startScreen.style.display = 'none';
         }
 
+        // === 系統初始化 ===
         function initSystem() {
             Config = (typeof GameConfig !== 'undefined') ? GameConfig : FallbackConfig;
             
             if (typeof GameConfig === 'undefined') {
-                debugText.innerText = "Mode: Fallback";
+                debugText.innerText = "Mode: Fallback (Config Not Found)";
                 debugText.style.color = "yellow";
             }
 
-            // Apply UI
+            // 1. 套用 UI 設定
             if (Config.title) uiTitle.innerText = Config.title;
             if (Config.description) uiDesc.innerText = Config.description;
             if (Config.startButtonText) startBtn.innerText = Config.startButtonText;
 
-            // Apply Mask
+            // 2. 套用遮罩設定
             const maskConfig = Config.mask || FallbackConfig.mask;
             const mode = maskConfig.mode || 'svg';
             const scale = maskConfig.scale || 1.0;
@@ -334,7 +243,7 @@
                 maskGroup.style.transform = `scale(${scale})`;
             }
 
-            // Load Image
+            // 3. 載入圖片
             const imgUrl = Config.backgroundImage || FallbackConfig.backgroundImage;
             const testImg = new Image();
             testImg.onload = () => {
@@ -342,12 +251,15 @@
                 if(Config === GameConfig) debugText.innerText = "System Ready.";
                 applyConfig();
             };
-            testImg.onerror = () => { showError(`無法載入背景圖片：${imgUrl}`); };
+            testImg.onerror = () => { 
+                showError(`無法載入背景圖片：${imgUrl}\n請檢查路徑或嘗試使用 HTTPS 圖片連結。`); 
+            };
             testImg.src = imgUrl;
         }
 
+        // === 套用遊戲參數 ===
         function applyConfig() {
-            // Apply size
+            // 背景尺寸
             const safeBuffer = 10;
             const widthVW = 100 + (Config.gameplay.maxMoveX * 2) + safeBuffer; 
             const heightVH = 100 + (Config.gameplay.maxMoveY * 2) + safeBuffer;
@@ -356,7 +268,7 @@
             roomLayer.style.left = `-${(widthVW - 100) / 2}vw`;
             roomLayer.style.top = `-${(heightVH - 100) / 2}vh`;
 
-            // Apply clue
+            // 線索位置
             if (Config.clue.show) {
                 clueTextEl.innerText = Config.clue.text;
                 clueCodeEl.innerText = Config.clue.code;
@@ -368,16 +280,17 @@
             }
         }
 
-        // ==========================================
-        // 核心邏輯：啟動與校正
-        // ==========================================
+        // === 啟動遊戲 ===
         startBtn.addEventListener('click', async () => {
             if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
                 try {
                     const permissionState = await DeviceOrientationEvent.requestPermission();
                     if (permissionState === 'granted') startGame();
-                    else alert('需要陀螺儀權限才能遊玩');
-                } catch (e) { startGame(); }
+                    else alert('需要陀螺儀權限才能遊玩，請在設定中開啟。');
+                } catch (e) { 
+                    console.error(e);
+                    startGame(); // 發生錯誤仍嘗試啟動 (相容性)
+                }
             } else {
                 startGame();
             }
@@ -387,141 +300,151 @@
             calibrateNextFrame = true;
         });
 
-        let calibrateNextFrame = false;
-
         function startGame() {
             startScreen.style.opacity = '0';
             setTimeout(() => { startScreen.style.display = 'none'; }, 500);
             
             recenterBtn.style.display = 'block';
             isRunning = true;
-            
-            // 標記需要在收到第一個數據時進行校正
-            calibrateNextFrame = true;
+            calibrateNextFrame = true; // 啟動時立刻校正
 
             window.addEventListener('deviceorientation', handleOrientation);
-            window.addEventListener('mousemove', handleMouse);
+            window.addEventListener('mousemove', handleMouse); // 電腦版除錯用
             
-            // 監聽螢幕旋轉，旋轉後重設校正
+            // 監聽螢幕旋轉，旋轉後自動重新校正
             window.addEventListener('orientationchange', () => { 
-                setTimeout(() => { calibrateNextFrame = true; }, 300); 
+                setTimeout(() => { calibrateNextFrame = true; }, 500); 
             });
 
             requestAnimationFrame(gameLoop);
         }
 
         // ==========================================
-        // 核心邏輯：陀螺儀處理 (防抖動 + 相對位移)
+        // [核心] 陀螺儀處理邏輯
         // ==========================================
         function handleOrientation(e) {
-            // 1. 獲取螢幕角度 (解決平板橫向問題)
+            // 1. 取得螢幕方向
             const screenAngle = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
             
             let rawAlpha = e.alpha;
-            let rawBeta = e.beta;   // -180 ~ 180 (前後)
-            let rawGamma = e.gamma; // -90 ~ 90 (左右)
+            let rawBeta = e.beta;   // -180 ~ 180 (前後傾斜)
+            let rawGamma = e.gamma; // -90 ~ 90 (左右傾斜)
 
             if (rawBeta === null || rawGamma === null) return;
 
-            // 2. 根據螢幕方向，將感測器數據映射到統一的 XY 軸
-            // inputX: 左右傾斜, inputY: 上下傾斜
+            // 2. 映射座標系 (解決平板橫拿問題)
             let inputX, inputY;
 
-            if (screenAngle === 0) { // 直向 (Portrait)
+            if (screenAngle === 0) { // 直向
                 inputX = rawGamma;
                 inputY = rawBeta;
             } 
-            else if (screenAngle === 90) { // 橫向 (Landscape Left)
+            else if (screenAngle === 90) { // 橫向 (向左轉)
                 inputX = rawBeta; 
                 inputY = -rawGamma;
             } 
-            else if (screenAngle === -90 || screenAngle === 270) { // 橫向 (Landscape Right)
+            else if (screenAngle === -90 || screenAngle === 270) { // 橫向 (向右轉)
                 inputX = -rawBeta;
                 inputY = rawGamma;
             } 
-            else { // 倒置 (Upside Down)
+            else { // 倒置 (很少見)
                 inputX = -rawGamma;
                 inputY = -rawBeta;
             }
             
-            // 3. 處理數據跳動 (Gimbal Lock 防護)
-            // 當裝置垂直時 (Beta ~ 90)，Gamma 會變得極不穩定。
-            // 這裡做一個簡單的 Clamp 防止極端值炸裂
-            if (inputX > 90) inputX = 90;
-            if (inputX < -90) inputX = -90;
+            // 3. [防亂跳] 強制限制輸入範圍
+            // 避開 +/- 90 度的 Gimbal Lock 危險區，只取 +/- 60 度以內的數據
+            const SAFE_LIMIT = 60;
+            if (inputX > SAFE_LIMIT) inputX = SAFE_LIMIT;
+            if (inputX < -SAFE_LIMIT) inputX = -SAFE_LIMIT;
+            if (inputY > SAFE_LIMIT) inputY = SAFE_LIMIT;
+            if (inputY < -SAFE_LIMIT) inputY = -SAFE_LIMIT;
 
-            // 4. 校正邏輯 (Recenter)
-            // 將「現在的角度」設為 0 點
+            // 4. [防暴衝] 檢測數據突變
+            // 如果這次數值跟上次差太多 (例如瞬間反轉)，則視為錯誤，忽略之
+            if (lastValidRawX !== null && lastValidRawY !== null) {
+                const diffX = Math.abs(inputX - lastValidRawX);
+                const diffY = Math.abs(inputY - lastValidRawY);
+                const SPIKE_THRESHOLD = 20; // 20度的瞬間變化是不合理的
+
+                if (diffX > SPIKE_THRESHOLD || diffY > SPIKE_THRESHOLD) {
+                    // 偵測到暴衝，直接使用上一次的數值
+                    inputX = lastValidRawX;
+                    inputY = lastValidRawY;
+                }
+            }
+            
+            // 更新有效數值
+            lastValidRawX = inputX;
+            lastValidRawY = inputY;
+
+            // 5. 校正邏輯 (Recenter)
             if (calibrateNextFrame) {
                 baseAngleX = inputX;
                 baseAngleY = inputY;
                 calibrateNextFrame = false;
-                debugText.innerText = "Calibrated!";
+                debugText.innerText = "Calibrated! Center Set.";
                 return;
             }
 
             if (baseAngleX === null) return;
 
-            // 5. 計算相對角度 (Delta)
+            // 6. 計算相對角度 (Delta)
             // 處理 +/- 180 度的循環跳變 (Wrap-around fix)
             let deltaX = inputX - baseAngleX;
             let deltaY = inputY - baseAngleY;
 
-            // 如果差值超過 180，代表跨越了邊界，需要修正
             if (deltaX > 180) deltaX -= 360;
             if (deltaX < -180) deltaX += 360;
             if (deltaY > 180) deltaY -= 360;
             if (deltaY < -180) deltaY += 360;
 
-            // 6. 低通濾波 (Low Pass Filter) - 消除手抖
-            // 係數 0.1 表示：新數值佔 10%，舊數值佔 90% (非常平滑)
-            // 係數 0.5 表示：反應較快
-            const filterFactor = 0.2; 
+            // 7. 低通濾波 (Low Pass Filter) - 平滑化
+            const filterFactor = 0.1; // 越小越平滑，越大反應越快
             
-            // 注意：這裡是對「輸入訊號」做平滑，而不是對「結果」做平滑
-            // 這能有效減少感測器本身的雜訊
             lastInputX = lastInputX + (deltaX - lastInputX) * filterFactor;
             lastInputY = lastInputY + (deltaY - lastInputY) * filterFactor;
 
-            // 7. 計算目標位置 (Mapping to CSS)
-            // 反向移動 (Parallax)
+            // 8. 計算最終 CSS 目標值
             const lim = Config.gameplay.limitAngle || 40;
             
-            // Clamp 最終角度
             let finalX = Math.max(-lim, Math.min(lim, lastInputX));
             let finalY = Math.max(-lim, Math.min(lim, lastInputY));
 
             targetX = (finalX / lim) * -Config.gameplay.maxMoveX;
             targetY = (finalY / lim) * -Config.gameplay.maxMoveY;
 
-            debugText.innerText = `X: ${Math.round(finalX)} Y: ${Math.round(finalY)} (Ang:${screenAngle})`;
+            debugText.innerText = `X: ${Math.round(finalX)} Y: ${Math.round(finalY)}`;
         }
 
+        // === 滑鼠處理 (電腦版除錯) ===
         function handleMouse(e) {
             targetX = ((e.clientX - window.innerWidth/2)/(window.innerWidth/2)) * -Config.gameplay.maxMoveX;
             targetY = ((e.clientY - window.innerHeight/2)/(window.innerHeight/2)) * -Config.gameplay.maxMoveY;
         }
 
+        // === 遊戲渲染迴圈 ===
         function gameLoop() {
             if (!isRunning) return;
             
             // 二次平滑 (Visual Smoothing)
-            // 這是為了讓畫面更新率 (60fps) 跟上數據變化
             const sm = Config.gameplay.smoothFactor || 0.1;
             
-            // 如果誤差很小，就直接停止計算，節省效能並防止微抖
-            if (Math.abs(targetX - currentX) < 0.05) currentX = targetX;
-            else currentX += (targetX - currentX) * sm;
+            // 只有當誤差大於 0.05 時才更新，避免微小抖動
+            if (Math.abs(targetX - currentX) > 0.05) {
+                currentX += (targetX - currentX) * sm;
+            }
+            if (Math.abs(targetY - currentY) > 0.05) {
+                currentY += (targetY - currentY) * sm;
+            }
 
-            if (Math.abs(targetY - currentY) < 0.05) currentY = targetY;
-            else currentY += (targetY - currentY) * sm;
-
-            // 使用 translate3d 開啟硬體加速
+            // 使用 translate3d 硬體加速
             roomLayer.style.transform = `translate3d(${currentX}vw, ${currentY}vh, 0)`;
             
             requestAnimationFrame(gameLoop);
         }
 
+        // 啟動初始化
         initSystem();
     </script>
 </body>
