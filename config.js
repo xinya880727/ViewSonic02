@@ -61,13 +61,8 @@ const GameConfig = {
     gameplay: {
         maxMoveX: 150,       // 左右視野移動範圍 (vw)
         maxMoveY: 150,       // 上下視野移動範圍 (vh)
-        smoothFactor: 0.02,  // 移動平滑度
-        limitAngle: 70      // 手機傾斜靈敏度
+        smoothFactor: 0.02,  // 移動平滑度 (數值越小越慢/越飄)
+        limitAngle: 70       // 手機傾斜靈敏度
     }
 
 };
-
-
-
-
-
