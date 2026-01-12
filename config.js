@@ -44,7 +44,7 @@ const GameConfig = {
     // 3. 線索紙條 (The Clue)
     // ==========================================
     clue: {
-        show: true,
+        show: false,
         text: "",
         code: "9527",
         
@@ -71,6 +71,7 @@ const GameConfig = {
     }
 
 };
+
 
 
 
