@@ -64,13 +64,14 @@ const GameConfig = {
         // 這能解決「看不到邊緣」的問題，讓您只需輕微轉動就能看到全景。
         sensitivity: 2.0,
 
-        maxMoveX: 130,       // 左右視野移動範圍 (vw)
-        maxMoveY: 80,       // 上下視野移動範圍 (vh)
+        maxMoveX: 150,       // 左右視野移動範圍 (vw)
+        maxMoveY: 150,       // 上下視野移動範圍 (vh)
         smoothFactor: 0.02,  // 移動平滑度 (數值越小越慢/越飄)
         limitAngle: 30       // 手機傾斜靈敏度
     }
 
 };
+
 
 
 
