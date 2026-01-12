@@ -58,7 +58,7 @@
         #room-layer {
             position: absolute; width: 120vw; height: 120vh; left: -10vw; top: -10vh;
             background-repeat: no-repeat; background-position: center center; background-size: cover;
-            /* 使用 translate3d 進行硬體加速，不加 transition 以免延遲 */
+            /* 移除 transition 以獲得零延遲跟隨 */
             will-change: transform; 
             z-index: 1;
         }
@@ -220,7 +220,6 @@
             Config.gameplay.limitAngle = 30; 
             Config.gameplay.maxMoveX = 65;
             Config.gameplay.maxMoveY = 65;
-            // 提升 SmoothFactor 讓反應更即時
             Config.gameplay.smoothFactor = 0.5;
 
             if (Config.title) uiTitle.innerText = Config.title;
@@ -294,7 +293,6 @@
             
             isRunning = true;
             
-            // 重置累加器
             lastRawX = null;
             lastRawY = null;
             accumulatedX = 0;
@@ -310,7 +308,7 @@
         }
 
         // ==========================================
-        // [修正版] 軟性邊界 (Soft Boundary)
+        // [修正版] 帶有異常攔截的累加法
         // ==========================================
         function handleOrientation(e) {
             const screenAngle = (screen.orientation && screen.orientation.angle) || window.orientation || 90;
@@ -343,24 +341,19 @@
             let deltaX = inputX - lastRawX;
             let deltaY = inputY - lastRawY;
 
-            // 處理環繞
+            // 1. 處理 360 度環繞 (正常旋轉)
             if (deltaX > 180) deltaX -= 360;
             if (deltaX < -180) deltaX += 360;
             if (deltaY > 180) deltaY -= 360;
             if (deltaY < -180) deltaY += 360;
 
-            // [關鍵] 軟性邊界檢查
-            // 如果已經到達邊界，且還想往外衝 -> 忽略該次輸入 (delta = 0)
-            // 這能防止在邊緣時因為雜訊導致的來回跳動
-            const lim = Config.gameplay.limitAngle || 30;
-
-            // X 軸邊界保護
-            if (accumulatedX >= lim && deltaX > 0) deltaX = 0;
-            else if (accumulatedX <= -lim && deltaX < 0) deltaX = 0;
-
-            // Y 軸邊界保護
-            if (accumulatedY >= lim && deltaY > 0) deltaY = 0;
-            else if (accumulatedY <= -lim && deltaY < 0) deltaY = 0;
+            // 2. [關鍵] 異常數值攔截 (Glitch Filter)
+            // 如果處理完環繞後，變化量依然巨大 (例如 > 45 度)，
+            // 代表這是感測器 Gimbal Lock 造成的翻轉雜訊。
+            // 這種情況下，我們將 Delta 設為 0，直接忽略這次跳動。
+            const GLITCH_LIMIT = 45;
+            if (Math.abs(deltaX) > GLITCH_LIMIT) deltaX = 0;
+            if (Math.abs(deltaY) > GLITCH_LIMIT) deltaY = 0;
 
             // 累加
             accumulatedX += deltaX;
@@ -370,17 +363,30 @@
             lastRawX = inputX;
             lastRawY = inputY;
 
-            // 硬限制 (最後一道防線，但因為有上面的軟性檢查，通常不會觸發彈跳)
-            if (accumulatedX > lim) accumulatedX = lim;
-            if (accumulatedX < -lim) accumulatedX = -lim;
-            if (accumulatedY > lim) accumulatedY = lim;
-            if (accumulatedY < -lim) accumulatedY = -lim;
+            // 緩衝區邏輯 (Buffer Zone)
+            const lim = Config.gameplay.limitAngle || 30;
+            const buffer = 5; 
+
+            // 限制邏輯數值
+            if (accumulatedX > lim + buffer) accumulatedX = lim + buffer;
+            if (accumulatedX < -lim - buffer) accumulatedX = -lim - buffer;
+            if (accumulatedY > lim + buffer) accumulatedY = lim + buffer;
+            if (accumulatedY < -lim - buffer) accumulatedY = -lim - buffer;
+
+            // 計算顯示數值 (Visual Clamp)
+            let displayX = accumulatedX;
+            let displayY = accumulatedY;
+            
+            if (displayX > lim) displayX = lim;
+            if (displayX < -lim) displayX = -lim;
+            if (displayY > lim) displayY = lim;
+            if (displayY < -lim) displayY = -lim;
 
             // 計算目標 CSS 數值
-            targetX = (accumulatedX / lim) * -Config.gameplay.maxMoveX;
-            targetY = (accumulatedY / lim) * -Config.gameplay.maxMoveY;
+            targetX = (displayX / lim) * -Config.gameplay.maxMoveX;
+            targetY = (displayY / lim) * -Config.gameplay.maxMoveY;
 
-            debugText.innerText = `X: ${Math.round(accumulatedX)} Y: ${Math.round(accumulatedY)}`;
+            debugText.innerText = `X: ${Math.round(displayX)} Y: ${Math.round(displayY)}`;
         }
 
         function handleMouse(e) {
@@ -391,13 +397,12 @@
         function gameLoop() {
             if (!isRunning) return;
             
-            // 使用高平滑係數以保持即時感，消除延遲
+            // 使用高平滑係數 (0.5) 保持跟手感
             const sm = 0.5; 
             
             currentRenderX += (targetX - currentRenderX) * sm;
             currentRenderY += (targetY - currentRenderY) * sm;
 
-            // 微小數值吸附
             if (Math.abs(targetX - currentRenderX) < 0.05) currentRenderX = targetX;
             if (Math.abs(targetY - currentRenderY) < 0.05) currentRenderY = targetY;
 
