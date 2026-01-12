@@ -58,7 +58,7 @@
         #room-layer {
             position: absolute; width: 120vw; height: 120vh; left: -10vw; top: -10vh;
             background-repeat: no-repeat; background-position: center center; background-size: cover;
-            /* 移除 transition 以獲得零延遲跟隨 */
+            /* 關閉 CSS transition 以確保即時性 */
             will-change: transform; 
             z-index: 1;
         }
@@ -182,7 +182,7 @@
             backgroundImage: 'https://images.unsplash.com/photo-1519074069444-1ba4fff66d16?q=80&w=2574&auto=format&fit=crop',
             mask: { mode: 'svg', scale: 1.0, shapes: `<circle cx="50" cy="40" r="15" fill="black" /><path d="M50 40 L65 90 L35 90 Z" fill="black" />` },
             clue: { show: true, text: "DEMO", code: "9527", top: "15%", left: "15%", rotation: -5 },
-            gameplay: { maxMoveX: 65, maxMoveY: 65, smoothFactor: 0.5, limitAngle: 30 }
+            gameplay: { maxMoveX: 65, maxMoveY: 65, smoothFactor: 0.3, limitAngle: 30, sensitivity: 2.0 }
         };
 
         let Config = null;
@@ -191,8 +191,8 @@
         // 核心變數 (累加法)
         let lastRawX = null;
         let lastRawY = null;
-        let accumulatedX = 0;
-        let accumulatedY = 0;
+        let accumulatedX = 0; // 累積的 X 軸位移量 (邏輯數值)
+        let accumulatedY = 0; // 累積的 Y 軸位移量 (邏輯數值)
         
         // 渲染變數
         let currentRenderX = 0;
@@ -216,11 +216,12 @@
 
             if (!Config.gameplay) Config.gameplay = FallbackConfig.gameplay;
             
-            // 強制優化參數
-            Config.gameplay.limitAngle = 30; 
-            Config.gameplay.maxMoveX = 65;
-            Config.gameplay.maxMoveY = 65;
-            Config.gameplay.smoothFactor = 0.5;
+            // 強制設定預設值，防止 config.js 漏參數
+            if (!Config.gameplay.limitAngle) Config.gameplay.limitAngle = 30; 
+            if (!Config.gameplay.maxMoveX) Config.gameplay.maxMoveX = 65;
+            if (!Config.gameplay.maxMoveY) Config.gameplay.maxMoveY = 65;
+            if (!Config.gameplay.smoothFactor) Config.gameplay.smoothFactor = 0.3;
+            if (!Config.gameplay.sensitivity) Config.gameplay.sensitivity = 2.0;
 
             if (Config.title) uiTitle.innerText = Config.title;
             if (Config.description) uiDesc.innerText = Config.description;
@@ -256,7 +257,9 @@
         }
 
         function applyConfig() {
+            // 背景尺寸計算
             const safeBuffer = 10;
+            // 寬度必須大於 100vw + 2 * maxMoveX
             const widthVW = 100 + (Config.gameplay.maxMoveX * 2) + safeBuffer; 
             const heightVH = 100 + (Config.gameplay.maxMoveY * 2) + safeBuffer;
             roomLayer.style.width = `${widthVW}vw`;
@@ -308,7 +311,7 @@
         }
 
         // ==========================================
-        // [修正版] 帶有異常攔截的累加法
+        // [最終版] 靈敏度放大 + 智慧防護
         // ==========================================
         function handleOrientation(e) {
             const screenAngle = (screen.orientation && screen.orientation.angle) || window.orientation || 90;
@@ -341,19 +344,24 @@
             let deltaX = inputX - lastRawX;
             let deltaY = inputY - lastRawY;
 
-            // 1. 處理 360 度環繞 (正常旋轉)
+            // 1. 處理環繞 (Wrap-around) - 優先處理
             if (deltaX > 180) deltaX -= 360;
             if (deltaX < -180) deltaX += 360;
             if (deltaY > 180) deltaY -= 360;
             if (deltaY < -180) deltaY += 360;
 
             // 2. [關鍵] 異常數值攔截 (Glitch Filter)
-            // 如果處理完環繞後，變化量依然巨大 (例如 > 45 度)，
-            // 代表這是感測器 Gimbal Lock 造成的翻轉雜訊。
-            // 這種情況下，我們將 Delta 設為 0，直接忽略這次跳動。
-            const GLITCH_LIMIT = 45;
+            // 如果處理完環繞後，變化量依然巨大 (例如 > 40 度)，
+            // 代表這是感測器 Gimbal Lock 造成的翻轉雜訊 (如 89 -> -89)。
+            // 這種情況下，直接忽略。
+            const GLITCH_LIMIT = 40;
             if (Math.abs(deltaX) > GLITCH_LIMIT) deltaX = 0;
             if (Math.abs(deltaY) > GLITCH_LIMIT) deltaY = 0;
+
+            // 3. [關鍵] 應用靈敏度倍率 (Sensitivity Multiplier)
+            const sensitivity = Config.gameplay.sensitivity || 2.0;
+            deltaX *= sensitivity;
+            deltaY *= sensitivity;
 
             // 累加
             accumulatedX += deltaX;
@@ -363,30 +371,19 @@
             lastRawX = inputX;
             lastRawY = inputY;
 
-            // 緩衝區邏輯 (Buffer Zone)
+            // 4. 限制範圍 (Soft Clamp)
             const lim = Config.gameplay.limitAngle || 30;
-            const buffer = 5; 
-
-            // 限制邏輯數值
-            if (accumulatedX > lim + buffer) accumulatedX = lim + buffer;
-            if (accumulatedX < -lim - buffer) accumulatedX = -lim - buffer;
-            if (accumulatedY > lim + buffer) accumulatedY = lim + buffer;
-            if (accumulatedY < -lim - buffer) accumulatedY = -lim - buffer;
-
-            // 計算顯示數值 (Visual Clamp)
-            let displayX = accumulatedX;
-            let displayY = accumulatedY;
             
-            if (displayX > lim) displayX = lim;
-            if (displayX < -lim) displayX = -lim;
-            if (displayY > lim) displayY = lim;
-            if (displayY < -lim) displayY = -lim;
+            if (accumulatedX > lim) accumulatedX = lim;
+            if (accumulatedX < -lim) accumulatedX = -lim;
+            if (accumulatedY > lim) accumulatedY = lim;
+            if (accumulatedY < -lim) accumulatedY = -lim;
 
             // 計算目標 CSS 數值
-            targetX = (displayX / lim) * -Config.gameplay.maxMoveX;
-            targetY = (displayY / lim) * -Config.gameplay.maxMoveY;
+            targetX = (accumulatedX / lim) * -Config.gameplay.maxMoveX;
+            targetY = (accumulatedY / lim) * -Config.gameplay.maxMoveY;
 
-            debugText.innerText = `X: ${Math.round(displayX)} Y: ${Math.round(displayY)}`;
+            debugText.innerText = `X: ${Math.round(accumulatedX)} Y: ${Math.round(accumulatedY)}`;
         }
 
         function handleMouse(e) {
@@ -397,8 +394,8 @@
         function gameLoop() {
             if (!isRunning) return;
             
-            // 使用高平滑係數 (0.5) 保持跟手感
-            const sm = 0.5; 
+            // 使用平滑係數
+            const sm = Config.gameplay.smoothFactor || 0.3; 
             
             currentRenderX += (targetX - currentRenderX) * sm;
             currentRenderY += (targetY - currentRenderY) * sm;
