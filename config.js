@@ -30,7 +30,7 @@ const GameConfig = {
         // 1. 中間的「洞」必須是「透明像素」(Transparency)。
         // 2. 四周必須是「不透明」的顏色（例如黑色、木紋、金屬）。
         // 3. 圖片尺寸建議大於螢幕 (例如 1920x1080)，以免露出邊緣。
-        imageSrc: 'hover02.png', 
+        imageSrc: 'hover03.png', 
 
         // --- 設定 B: 如果 mode 是 'svg' ---
         // 黑色(fill="black") 會變成透明的洞，白色是不透明的牆。
@@ -66,6 +66,7 @@ const GameConfig = {
     }
 
 };
+
 
 
 
